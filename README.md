@@ -26,7 +26,7 @@ Only LiteLLM is exposed, on 80/443 through Traefik. Everything else stays inside
 | 1. VM image | Plain `k3s-node` image (`k3s-node.qcow2`) from [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder). Portal settings: `docs/portal-values.md` in that repo. |
 | 2. Container images | The stack uses public images. The chat page image `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0` is private: the node pulls it with `REGISTRY_USER` and `REGISTRY_TOKEN` (required). |
 | 3. Day 0 file | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) for a single node with two parameters, [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) to join a cluster or set credentials. |
-| 4. Parameters | BASIC: `REGISTRY_USER` and `REGISTRY_TOKEN` (required), `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer). Full list: [Day 0 templates](#3-day-0-templates). |
+| 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN` and `ADMIN_EMAIL` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` and `FQDN` (optional). Full list: [Day 0 templates](#3-day-0-templates). |
 
 ACL: allow 22 and 80/443. First start takes about 10 minutes (see First start).
 
@@ -39,8 +39,8 @@ Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qc
 
 | Template | Use | Portal parameters |
 |---|---|---|
-| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node, everything else fixed or generated | 9, 2 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster join, chosen credentials, pinned repo version | 18, 2 required |
+| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node, everything else fixed or generated | 7, 3 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster join, chosen credentials, pinned repo version | 14, 3 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
@@ -53,8 +53,6 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `GROQ_API_KEY` | no (for Groq models) | no (for Groq models) | empty | `gsk_AbCdEf1234567890` | Groq API key. |
 | `GEMINI_API_KEY` | no (for Gemini models) | no (for Gemini models) | empty | `AIzaSyAbCdEf1234567890` | Gemini API key. |
 | `LITELLM_MASTER_KEY` | - | no | generated | `sk-lab-0123456789abcdef` | LiteLLM admin key. |
-| `LANGFUSE_ADMIN_EMAIL` | - | no | `admin@ai-gateway.local` | `admin@example.com` | Langfuse first user. |
-| `LANGFUSE_ADMIN_PASSWORD` | - | no | generated | `ChangeMe-2026` | Langfuse first user password. |
 | `K3S_ROLE` | - | no | `single` | `single` | `single`: standalone node. `server`: control-plane node. `agent`: k3s worker node that joins an existing cluster; the stack is not installed on it. |
 | `K3S_SERVER_URL` | - | no (agent only) | empty | `https://10.0.0.5:6443` | URL used by an agent to join the k3s cluster. Empty for `single` or the first `server`. |
 | `K3S_TOKEN` | - | no (agent only) | empty | `K10abc123def456::server:789xyz` | Secret used to join the k3s cluster. |
@@ -63,17 +61,15 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `STACK_TOKEN` | - | no | empty | `github_pat_11ABCDEF0xxxxxxxx` | Read-only GitHub token, only for a private fork. |
 | `REGISTRY_USER` | yes | yes | - | `my-github-user` | GitHub login used to pull the private chat page image from ghcr.io. Day 0 stops the stack install without it. |
 | `REGISTRY_TOKEN` | yes | yes | - | `ghp_AbCdEf1234567890AbCdEf1234567890AbCd` | Classic personal access token with only `read:packages`. Written to `/etc/rancher/k3s/registries.yaml` (root only) before k3s starts. Expires: set a reminder to rotate it. |
-| `ADMIN_EMAIL` | no | no | `admin@ai-gateway.local` | `admin@example.com` | Login name of the shared admin account: Langfuse, LiteLLM admin UI and the chat page login. |
-| `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. Replaces `LANGFUSE_ADMIN_PASSWORD` when both are set. |
+| `ADMIN_EMAIL` | yes | yes | - | `xxxx@eu.equinix.com` | Login name of the shared admin account (Langfuse, LiteLLM admin UI, chat page login). It must be a real address: it is also the contact for the Let's Encrypt certificates. |
+| `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 | `FQDN` | no | no | empty (IP access, default certificate) | `gw1.example.net` | Public name of the node. Adds `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. Needs DNS records for `<FQDN>` and `langfuse.<FQDN>` (or `*.<FQDN>`) pointing to the node, and port 80 reachable from the internet. |
-| `ACME_EMAIL` | with `FQDN` | with `FQDN` | - | `ops@example.net` | Contact address for the certificate authority. |
-| `ACME_STAGING` | no | no | empty (production CA) | `yes` | `yes` uses Let's Encrypt's staging CA: untrusted certificates, but no rate limits. Use it for a first test. |
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
 ## 4. Web interfaces
 
-`<node>` is the node's IP, or the public name when `FQDN` is set (section 3). One admin account (`ADMIN_EMAIL` and `ADMIN_PASSWORD`, generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
+`<node>` is the node's IP, or the public name when `FQDN` is set (section 3). One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
 
 | Interface | URL | Access | Login |
 |---|---|---|---|
@@ -170,7 +166,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 
 ## 10. Findings and limits
 
-- **Public name:** the certificate issuance itself has not been tested, because it needs a real DNS name pointing at a node. Start with `ACME_STAGING=yes`. If DNS or port 80 is not ready at first boot, Traefik retries; check `sudo k3s kubectl -n kube-system logs deploy/traefik`.
+- **Public name:** the certificate issuance itself has not been tested, because it needs a real DNS name pointing at a node. Production Let's Encrypt is used, which limits repeated failures: have the DNS records and port 80 ready before the first boot. Traefik retries; check `sudo k3s kubectl -n kube-system logs deploy/traefik`.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
 - **Fail open:** the LLM Guard and RAG modules let a request through unchanged (logged) if their service is unreachable, so injection blocking applies only while LLM Guard answers. How LiteLLM's native Presidio hooks behave when Presidio is down is untested.
 - **Floating tags:** `presidio-*:latest`, `python:3.12-slim`, and the packages installed at first start (`llm-guard`, `torch`) can change between boots. Pin them once a deployment is validated.

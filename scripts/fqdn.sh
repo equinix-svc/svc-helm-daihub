@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # fqdn.sh - public name with a signed certificate (Let's Encrypt through Traefik). Run by Day 0 when FQDN is set.
-# Needs in the environment: FQDN ACME_EMAIL, optional ACME_STAGING=yes, MAN (the k3s manifests directory).
-# Writes traefik-config.yaml (ACME resolver, persistent certificate store), langfuse-config.yaml (Langfuse login URL) and
-# fqdn-ingress.yaml (LiteLLM and the chat page on the name, Langfuse on langfuse.<name>), plus ${FQDN_FILE:-/etc/ai-gateway/fqdn}.
+# Needs in the environment: FQDN, ADMIN_EMAIL (the certificate contact), MAN (the k3s manifests directory).
+# Writes traefik-config.yaml (Let's Encrypt resolver, persistent certificate store), langfuse-config.yaml (Langfuse login URL) and
+# fqdn-ingress.yaml (LiteLLM and the chat page on the name, Langfuse on langfuse.<name>), plus ${FQDN_FILE:-${FQDN_FILE:-/etc/ai-gateway/fqdn}}.
 set -euo pipefail
 MAN="${MAN:-/var/lib/rancher/k3s/server/manifests}"
   FQDN="$(printf '%s' "$FQDN" | tr 'A-Z' 'a-z')"
   printf '%s' "$FQDN" | grep -Eq '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$' || { echo "FQDN is not a valid name: $FQDN"; exit 1; }
-  [ -n "${ACME_EMAIL:-}" ] || { echo "missing required parameter ACME_EMAIL (needed with FQDN)"; exit 1; }
+  case "${ADMIN_EMAIL:-}" in *@*.*) ;; *) echo "FQDN needs a real e-mail address in ADMIN_EMAIL (got: '${ADMIN_EMAIL:-}')"; exit 1 ;; esac
   CA=https://acme-v02.api.letsencrypt.org/directory
-  [ "${ACME_STAGING:-}" = yes ] && CA=https://acme-staging-v02.api.letsencrypt.org/directory
   cat > "$MAN/traefik-config.yaml" <<FQDNEOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -20,7 +19,7 @@ spec:
     certificatesResolvers:
       le:
         acme:
-          email: "$ACME_EMAIL"
+          email: "$ADMIN_EMAIL"
           caServer: "$CA"
           storage: /data/acme.json
           httpChallenge: { entryPoint: web }
@@ -87,5 +86,5 @@ spec:
     - host: "langfuse.$FQDN"
       http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: langfuse-web, port: { number: 3000 } } } }] }
 FQDNEOF
-  printf '%s\n' "$FQDN" > ${FQDN_FILE:-/etc/ai-gateway/fqdn}
+  printf '%s\n' "$FQDN" > ${FQDN_FILE:-${FQDN_FILE:-/etc/ai-gateway/fqdn}}
   echo "FQDN $FQDN configured (ACME CA: $CA)"
