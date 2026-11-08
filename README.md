@@ -26,7 +26,7 @@ Only LiteLLM is exposed, on 80/443 through Traefik. Everything else stays inside
 | 1. VM image | Plain `k3s-node` image (`k3s-node.qcow2`) from [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder). Portal settings: `docs/portal-values.md` in that repo. |
 | 2. Container images | The stack uses public images. The chat page image `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0` is private: the node pulls it with `REGISTRY_USER` and `REGISTRY_TOKEN` (required). |
 | 3. Day 0 file | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) for a single node with two parameters, [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) to join a cluster or set credentials. |
-| 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL` and `FQDN` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` (optional). Create the DNS records for `FQDN` first. Full list: [Day 0 templates](#3-day-0-templates). |
+| 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL` and `FQDN` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` (optional). Create the DNS records for `FQDN` once the node has its IP. Full list: [Day 0 templates](#3-day-0-templates). |
 
 ACL: allow 22 and 80/443. First start takes about 10 minutes (see First start).
 
@@ -53,7 +53,7 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `REGISTRY_USER` | yes | yes | - | `my-github-user` | GitHub login used to pull the private chat page image from ghcr.io. Day 0 stops the stack install without it. |
 | `REGISTRY_TOKEN` | yes | yes | - | `ghp_AbCdEf1234567890AbCdEf1234567890AbCd` | Classic personal access token with only `read:packages`. Written to `/etc/rancher/k3s/registries.yaml` (root only) before k3s starts. Expires: set a reminder to rotate it. |
 | `ADMIN_EMAIL` | yes | yes | - | `xxxx@eu.equinix.com` | Login name of the shared admin account (Langfuse, LiteLLM admin UI, chat page login). It must be a real address: it is also the contact for the Let's Encrypt certificates. |
-| `FQDN` | yes | yes | - | `gw1.example.net` | Public name of the node. Serves `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. Create the DNS records for `<FQDN>` and `langfuse.<FQDN>` (or `*.<FQDN>`) pointing to the node before booting, and keep port 80 reachable from the internet. If DNS is not ready the stack still works by IP and the certificates wait: Traefik retries. |
+| `FQDN` | yes | yes | - | `fred-dai-par01.example.net` | Public name of the node. Serves `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. The node's public IP is only known after creation, so create the DNS records afterwards: the node waits (checks every 30 seconds) until `<FQDN>` and `langfuse.<FQDN>` both resolve to it, then enables the certificates, so the first Let's Encrypt attempt succeeds. The login banner shows the exact records to create. Keep port 80 reachable from the internet. |
 | `GROQ_API_KEY` | no (for Groq models) | no (for Groq models) | empty | `gsk_AbCdEf1234567890` | Groq API key. |
 | `GEMINI_API_KEY` | no (for Gemini models) | no (for Gemini models) | empty | `AIzaSyAbCdEf1234567890` | Gemini API key. |
 | `LITELLM_MASTER_KEY` | - | no | generated | `sk-lab-0123456789abcdef` | LiteLLM admin key. |
@@ -67,7 +67,7 @@ ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
 ## 4. Web interfaces
 
-`<node>` is the public name (`FQDN`, section 3). Until its certificates are issued, `https://<node-IP>/` also works, with Traefik's default certificate. One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
+`<node>` is the public name (`FQDN`, section 3). Until the DNS records exist and the certificates are issued, `https://<node-IP>/` also works, with Traefik's default certificate. One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
 
 | Interface | URL | Access | Login |
 |---|---|---|---|
@@ -164,7 +164,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 
 ## 10. Findings and limits
 
-- **Public name:** the certificate issuance itself has not been tested, because it needs a real DNS name pointing at a node. Production Let's Encrypt is used, which limits repeated failures: have the DNS records and port 80 ready before the first boot. Traefik retries; check `sudo k3s kubectl -n kube-system logs deploy/traefik`.
+- **Public name:** the DNS wait was tested with stand-ins for DNS and the node's addresses; the certificate issuance itself has not been tested, because it needs a real DNS name pointing at a node. The wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver; a negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
 - **Fail open:** the LLM Guard and RAG modules let a request through unchanged (logged) if their service is unreachable, so injection blocking applies only while LLM Guard answers. How LiteLLM's native Presidio hooks behave when Presidio is down is untested.
 - **Floating tags:** `presidio-*:latest`, `python:3.12-slim`, and the packages installed at first start (`llm-guard`, `torch`) can change between boots. Pin them once a deployment is validated.

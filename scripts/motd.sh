@@ -9,7 +9,7 @@ fi
 export DAIHUB_MOTD_SHOWN=1
 
 _daihub_motd() {
-  local B="" D="" G="" Y="" N="" ip host ready total status fqdn base
+  local dns dip B="" D="" G="" Y="" N="" ip host ready total status fqdn base
   if [ -z "${NO_COLOR:-}" ]; then B=$'\e[1m'; D=$'\e[2m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'; fi
   _k() {   # kubectl as the login user (kubeconfig copied by Day 0), else sudo; never blocks the login for long
     if [ -r "$HOME/.kube/config" ]; then KUBECONFIG="$HOME/.kube/config" timeout 3 k3s kubectl "$@" 2>/dev/null
@@ -28,6 +28,14 @@ _daihub_motd() {
   printf '\n%sDAI Hub%s · AI gateway on k3s          %s%s%s\n' "$B" "$N" "$D" "$host" "$N"
   printf '%s\n' "──────────────────────────────────────────────────────────────────────────────"
   printf '  Stack       %s\n\n' "$status"
+  dns=$(cat /etc/ai-gateway/dns-wait.state 2>/dev/null)
+  case "$dns" in
+    waiting*)
+      dip=${dns#*ip=}; dip=${dip% *}; [ "$dip" = pending ] && dip="this node's public IP (see the portal)"
+      printf '  %s! DNS not ready%s: create A record(s) pointing to %s%s%s\n' "$Y" "$N" "$B" "$dip" "$N"
+      for n in $(printf '%s' "${dns#*names=}" | tr ',' ' '); do printf '      %s\n' "$n"; done
+      printf '    The certificates are requested automatically within a minute of the records resolving.\n\n' ;;
+  esac
   printf '  %sWEB INTERFACES%s\n' "$B" "$N"
   printf '  %-15s %-35s %s\n' "Chat page"      "$base/chat/"               "login: the admin account"
   printf '  %-15s %-35s %s\n' "LiteLLM admin"  "$base/ui/"                 "login: the admin account"
