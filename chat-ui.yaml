@@ -20,11 +20,21 @@ spec:
           image: ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0
           imagePullPolicy: Always
           env:
+            - name: FQDN                         # public name, when Day 0 was given one (for the page links)
+              valueFrom: { configMapKeyRef: { name: site-fqdn, key: FQDN, optional: true } }
             - name: DEMO_KEY                    # the page needs no key: nginx adds this one to requests that carry none
               valueFrom: { secretKeyRef: { name: chat-demo-key, key: DEMO_KEY, optional: true } }
           ports: [{ containerPort: 80 }]
           readinessProbe: { httpGet: { path: /chat/, port: 80 }, periodSeconds: 5 }
           resources: { requests: { cpu: 5m, memory: 8Mi }, limits: { memory: 64Mi } }
+---
+# Browser login for the chat page (the page has no login of its own). Users come from Secret basic-auth, created by Day 0 from
+# ADMIN_EMAIL and ADMIN_PASSWORD. removeHeader keeps the login out of the request that nginx forwards to LiteLLM.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: basic-auth, namespace: ai-gateway }
+spec:
+  basicAuth: { secret: basic-auth, removeHeader: true, realm: DAI Hub }
 ---
 apiVersion: v1
 kind: Service
@@ -38,6 +48,7 @@ metadata:
   namespace: ai-gateway
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.middlewares: ai-gateway-basic-auth@kubernetescrd
 spec:
   rules:
     - http:
