@@ -58,8 +58,8 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `GEMINI_API_KEY` | no (for Gemini models) | no (for Gemini models) | empty | `AIzaSyAbCdEf1234567890` | Gemini API key. |
 | `LITELLM_MASTER_KEY` | - | no | generated | `sk-lab-0123456789abcdef` | LiteLLM admin key. |
 | `K3S_ROLE` | - | no | `single` | `single` | `single`: standalone node. `server`: control-plane node. `agent`: k3s worker node that joins an existing cluster; the stack is not installed on it. |
-| `K3S_SERVER_URL` | - | no (agent only) | empty | `https://10.0.0.5:6443` | URL used by an agent to join the k3s cluster. Empty for `single` or the first `server`. |
-| `K3S_TOKEN` | - | no (agent only) | empty | `K10abc123def456::server:789xyz` | Secret used to join the k3s cluster. |
+| `K3S_SERVER_URL` | - | no | empty | `https://10.0.0.5:6443` | Agent only. URL used by an agent to join the k3s cluster. Empty for `single` or the first `server`. |
+| `K3S_TOKEN` | - | no | empty | `K10abc123def456::server:789xyz` | Agent only. Secret used to join the k3s cluster. |
 | `K3S_TLS_SAN` | - | no | empty | `203.0.113.20` | Extra name or IP in the k3s API server certificate, for `kubectl` or agents reaching port 6443 from outside. Not needed for local `sudo k3s kubectl`. |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 
