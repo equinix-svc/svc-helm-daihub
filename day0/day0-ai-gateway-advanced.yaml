@@ -132,6 +132,10 @@ write_files:
       }
       fetch ai-gateway.yaml ai-gateway.yaml
       fetch chat-ui.yaml chat-ui.yaml
+      # Login banner (best effort: never stops the install)
+      curl -fsSL --retry 3 "${AUTH[@]}" -H "Accept: application/vnd.github.raw" \
+        "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/motd.sh?ref=$REF" -o /etc/profile.d/dai-hub-motd.sh \
+        && chmod 0644 /etc/profile.d/dai-hub-motd.sh && echo "login banner installed" || echo "login banner not installed (non-fatal)"
 
   - path: /usr/local/bin/day0-bootstrap.sh
     owner: root:root

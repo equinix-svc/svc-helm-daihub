@@ -80,6 +80,8 @@ ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 | SeaweedFS filer (S3 buckets, RAG documents) | `http://localhost:8888` | SSH tunnel | none |
 | rag-service API docs | `http://localhost:8000/docs` | SSH tunnel | none |
 
+The login banner (`scripts/motd.sh`, installed by Day 0 in `/etc/profile.d/`) lists these URLs with the live pod count on each interactive SSH login; to install it on an existing node run `sudo curl -fsSL https://raw.githubusercontent.com/equinix-svc/svc-helm-daihub/main/scripts/motd.sh -o /etc/profile.d/dai-hub-motd.sh`.
+
 The master key and the Langfuse login are in `/etc/ai-gateway/credentials.env` on the node (`sudo cat`). The certificate is Traefik's default, so a browser warns; accept it.
 
 Tunnel (one terminal per interface; replace the service and ports):
