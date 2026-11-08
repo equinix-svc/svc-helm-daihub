@@ -8,10 +8,10 @@
 #   Custom parameters : GROQ_API_KEY GEMINI_API_KEY   (both optional; at least one is needed for the models to answer)
 #                       REGISTRY_USER REGISTRY_TOKEN   (REQUIRED: GitHub login and read:packages token to pull the private chat page image from ghcr.io)
 #                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
-#   Fixed             : K3S_ROLE=single, STACK_REF=main; LiteLLM master key and Langfuse login are generated
+#   Fixed             : K3S_ROLE=single; LiteLLM master key and Langfuse login are generated
 # AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
 # it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
-# (branch or tag STACK_REF, default main; STACK_TOKEN is only for a private fork) into the
+# (default branch) into the
 # k3s manifests directory, and k3s's Helm controller deploys LiteLLM, Langfuse, Presidio, LLM Guard, Qdrant and
 # the RAG service. Needs outbound internet at first boot. Credentials: /etc/ai-gateway/credentials.env (root).
 #
@@ -69,8 +69,6 @@ write_files:
       GROQ_API_KEY='[(${GROQ_API_KEY})]'
       GEMINI_API_KEY='[(${GEMINI_API_KEY})]'
       LITELLM_MASTER_KEY=''
-      STACK_REF='main'
-      STACK_TOKEN=''
       REGISTRY_USER='[(${REGISTRY_USER})]'
       REGISTRY_TOKEN='[(${REGISTRY_TOKEN})]'
       ADMIN_EMAIL='[(${ADMIN_EMAIL})]'
@@ -83,14 +81,13 @@ write_files:
     content: |
       #!/usr/bin/env bash
       # Called by day0-bootstrap.sh with GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY
-      # ADMIN_PASSWORD STACK_REF STACK_TOKEN in the environment (optional) and REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN (required).
+      # ADMIN_PASSWORD in the environment (optional) and REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN (required).
       set -euo pipefail
       for v in REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN; do
         [ -n "${!v:-}" ] || { echo "missing required parameter $v"; exit 1; }
       done
       K="/usr/local/bin/k3s kubectl"
       MAN=/var/lib/rancher/k3s/server/manifests
-      REF="${STACK_REF:-main}"
       gen() { head -c "$1" /dev/urandom | od -An -vtx1 | tr -d ' \n'; }
 
       MASTER="${LITELLM_MASTER_KEY:-sk-$(gen 20)}"
@@ -134,28 +131,26 @@ write_files:
       $K -n ai-gateway create secret generic basic-auth --from-literal=users="$LF_EMAIL:$HASH"
       $K -n ai-gateway create configmap site-fqdn --from-literal=FQDN="${FQDN:-}"
 
-      AUTH=()
-      [ -n "${STACK_TOKEN:-}" ] && AUTH=(-H "Authorization: Bearer $STACK_TOKEN")
       fetch() {   # fetch <path in repo> <file name in the manifests directory>
         for i in 1 2 3 4 5 6; do
-          curl -fsSL --retry 3 "${AUTH[@]}" -H "Accept: application/vnd.github.raw" \
-            "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/$1?ref=$REF" -o "$MAN/$2" && break
+          curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/$1" -o "$MAN/$2" && break
           echo "download of $1 failed (try $i), retrying"; sleep 20
         done
         [ -s "$MAN/$2" ] || { echo "could not download $1"; exit 1; }
-        echo "$2 installed in $MAN (ref $REF); k3s will deploy it"
+        echo "$2 installed in $MAN; k3s will deploy it"
       }
       fetch ai-gateway.yaml ai-gateway.yaml
       fetch chat-ui.yaml chat-ui.yaml
       # Login banner (best effort: never stops the install)
-      curl -fsSL --retry 3 "${AUTH[@]}" -H "Accept: application/vnd.github.raw" \
-        "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/motd.sh?ref=$REF" -o /etc/profile.d/dai-hub-motd.sh \
+      curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
+        "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/motd.sh" -o /etc/profile.d/dai-hub-motd.sh \
         && chmod 0644 /etc/profile.d/dai-hub-motd.sh && echo "login banner installed" || echo "login banner not installed (non-fatal)"
 
       # Public name with a signed certificate (Let's Encrypt through Traefik): only when FQDN is given
       if [ -n "${FQDN:-}" ]; then
-        curl -fsSL --retry 3 "${AUTH[@]}" -H "Accept: application/vnd.github.raw" \
-          "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/fqdn.sh?ref=$REF" -o /usr/local/bin/day0-fqdn.sh \
+        curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
+          "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/fqdn.sh" -o /usr/local/bin/day0-fqdn.sh \
           && MAN="$MAN" FQDN="$FQDN" ADMIN_EMAIL="$LF_EMAIL" bash /usr/local/bin/day0-fqdn.sh \
           || { echo "FQDN setup failed (see above)"; exit 1; }
       fi
@@ -289,7 +284,7 @@ write_files:
       if [ "$UNIT" = k3s ] && [ -z "$K3S_SERVER_URL" ]; then
         echo "installing the AI gateway stack"
         GROQ_API_KEY="$GROQ_API_KEY" GEMINI_API_KEY="$GEMINI_API_KEY" LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-                STACK_REF="$STACK_REF" STACK_TOKEN="$STACK_TOKEN" \
+                \
         ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" FQDN="$FQDN" \
         REGISTRY_USER="$REGISTRY_USER" REGISTRY_TOKEN="$REGISTRY_TOKEN" /usr/local/bin/day0-ai-stack.sh \
           || echo "AI gateway install failed: see this log"
