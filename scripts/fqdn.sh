@@ -17,6 +17,7 @@ UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
   case "${ADMIN_EMAIL:-}" in *@*.*) ;; *) echo "FQDN needs a real e-mail address in ADMIN_EMAIL (got: '${ADMIN_EMAIL:-}')"; exit 1 ;; esac
   CA=https://acme-v02.api.letsencrypt.org/directory
   mkdir -p "$PENDING" "$CONF_DIR"
+  chmod 0755 "$CONF_DIR"          # the login banner (run as the login user) reads fqdn and dns-wait.state; secrets stay 0600 files
   rm -f "$MAN/traefik-config.yaml" "$MAN/langfuse-config.yaml" "$MAN/fqdn-ingress.yaml"
   cat > "$PENDING/traefik-config.yaml" <<FQDNEOF
 apiVersion: helm.cattle.io/v1

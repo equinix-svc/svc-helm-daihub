@@ -97,7 +97,7 @@ write_files:
       LF_PK="pk-lf-$(gen 16)"; LF_SK="sk-lf-$(gen 16)"
       DEMO_KEY="sk-demo-$(gen 16)"
 
-      install -d -m 0700 /etc/ai-gateway
+      install -d -m 0755 /etc/ai-gateway          # readable: the login banner reads fqdn and dns-wait.state; credentials.env below is 0600
       ( umask 077; cat > /etc/ai-gateway/credentials.env <<EOF
       LITELLM_MASTER_KEY=$MASTER
       LANGFUSE_ADMIN_EMAIL=$LF_EMAIL
