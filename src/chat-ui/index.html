@@ -83,7 +83,7 @@
   <span class="crumb"><span class="dot" id="dot"></span><b id="status">Checking...</b></span>
 </div>
 <div class="top2">
-  <span class="crumb">Chat &nbsp;/&nbsp; <b>llm-pool</b></span>
+  <span class="crumb">Chat &nbsp;/&nbsp; <b id="crumbModel">llm-pool</b></span>
   <span class="grow"></span>
   <a href="#" id="mykey">Use my own key</a>
 </div>
@@ -191,6 +191,7 @@ async function connect() {
     setState('ok', ownKey ? 'Connected (own key)' : 'Connected (demo key)'); setMode();
     const ids = (await r.json()).data.map(m => m.id);
     if (ids.length) { modelEl.innerHTML = ''; ids.forEach(i => modelEl.add(new Option(i, i))); if (ids.includes('llm-pool')) modelEl.value = 'llm-pool'; }
+    syncCrumb();
   } catch (e) { setState('bad', 'Offline'); return; }
   try {
     const r = await fetch(BASE + '/v1/model/info', {headers: headers()});
@@ -202,6 +203,7 @@ function servedBy(r) {
   if (id && backends[id]) return backends[id];
   try { return base ? new URL(base).host : ''; } catch (e) { return base; }
 }
+function syncCrumb() { $('#crumbModel').textContent = modelEl.value || '-'; }
 function bold(t) { const b = document.createElement('b'); b.textContent = t; return b; }
 
 async function send() {
@@ -248,6 +250,7 @@ $('#form').addEventListener('submit', e => { e.preventDefault(); send(); });
 textEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 ['#clear2', '#add'].forEach(s => $(s).onclick = reset);
 $('#exportBtn').onclick = exportChat;
+modelEl.addEventListener('change', syncCrumb);
 $('#rag').onclick = () => { ragOn = !ragOn; $('#rag').classList.toggle('active', ragOn); $('#rag').setAttribute('aria-pressed', ragOn); };
 try { keyEl.value = sessionStorage.getItem('dai_key') || ''; } catch (e) {}
 draw(); intro(); setMode(); connect();
