@@ -95,6 +95,7 @@ write_files:
       LF_PASS="${LANGFUSE_ADMIN_PASSWORD:-$(gen 12)}"
       PG="$(gen 16)"; RD="$(gen 16)"; CH="$(gen 16)"
       LF_PK="pk-lf-$(gen 16)"; LF_SK="sk-lf-$(gen 16)"
+      DEMO_KEY="sk-demo-$(gen 16)"
 
       install -d -m 0700 /etc/ai-gateway
       ( umask 077; cat > /etc/ai-gateway/credentials.env <<EOF
@@ -103,6 +104,7 @@ write_files:
       LANGFUSE_ADMIN_PASSWORD=$LF_PASS
       LANGFUSE_PUBLIC_KEY=$LF_PK
       LANGFUSE_SECRET_KEY=$LF_SK
+      CHAT_DEMO_KEY=$DEMO_KEY
       EOF
       )
 
@@ -118,6 +120,8 @@ write_files:
         --from-literal=LITELLM_MASTER_KEY="$MASTER" --from-literal=REDIS_PASSWORD="$RD" \
         --from-literal=GROQ_API_KEY="${GROQ_API_KEY:-}" --from-literal=GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
         --from-literal=LANGFUSE_PUBLIC_KEY="$LF_PK" --from-literal=LANGFUSE_SECRET_KEY="$LF_SK"
+
+      $K -n ai-gateway create secret generic chat-demo-key --from-literal=DEMO_KEY="$DEMO_KEY"
 
       AUTH=()
       [ -n "${STACK_TOKEN:-}" ] && AUTH=(-H "Authorization: Bearer $STACK_TOKEN")

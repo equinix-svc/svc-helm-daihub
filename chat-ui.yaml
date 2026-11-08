@@ -19,6 +19,9 @@ spec:
         - name: nginx
           image: ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0
           imagePullPolicy: Always
+          env:
+            - name: DEMO_KEY                    # the page needs no key: nginx adds this one to requests that carry none
+              valueFrom: { secretKeyRef: { name: chat-demo-key, key: DEMO_KEY, optional: true } }
           ports: [{ containerPort: 80 }]
           readinessProbe: { httpGet: { path: /chat/, port: 80 }, periodSeconds: 5 }
           resources: { requests: { cpu: 5m, memory: 8Mi }, limits: { memory: 64Mi } }
@@ -42,3 +45,31 @@ spec:
           - path: /chat
             pathType: Prefix
             backend: { service: { name: chat-ui, port: { number: 80 } } }
+---
+# Registers the demo key in LiteLLM: restricted to llm-pool, with a budget and a rate limit. Safe to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: chat-demo-key-init, namespace: ai-gateway }
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: register
+          image: curlimages/curl:8.10.1
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: litellm-env, key: LITELLM_MASTER_KEY } }
+            - name: DEMO_KEY
+              valueFrom: { secretKeyRef: { name: chat-demo-key, key: DEMO_KEY } }
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fs http://ai-litellm:4000/health/readiness >/dev/null; do echo "waiting for LiteLLM"; sleep 10; done
+              code=$(curl -s -o /tmp/r -w '%{http_code}' http://ai-litellm:4000/key/generate \
+                -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+                -d "{\"key\":\"$DEMO_KEY\",\"key_alias\":\"chat-demo\",\"models\":[\"llm-pool\"],\"max_budget\":5,\"rpm_limit\":30,\"metadata\":{\"purpose\":\"chat page demo key\"}}")
+              echo "key/generate -> $code"
+              [ "$code" = 200 ] || { cat /tmp/r; exit 1; }

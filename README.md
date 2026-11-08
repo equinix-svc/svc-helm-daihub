@@ -93,20 +93,22 @@ ssh -L 3000:localhost:3000 <user>@<node> "sudo k3s kubectl -n ai-gateway port-fo
 
 ## 5. Chat page
 
-[`src/chat-ui/`](src/chat-ui/) is a light chat page to test the gateway end to end: one static HTML file served by nginx, behind the same Traefik. Day 0 installs it with the stack; it is a separate manifest, not part of `ai-gateway.yaml`. It ships as its own container image, built by the `images` GitHub workflow on every change under `src/chat-ui/`.
+[`src/chat-ui/`](src/chat-ui/) is a light chat console to test the gateway end to end: one static HTML page served by nginx behind the same Traefik. Day 0 installs it with the stack as its own manifest, `chat-ui.yaml`, and its own container image built by the `images` GitHub workflow on every change under `src/chat-ui/`.
 
 | Item | Detail |
 |---|---|
 | Image | `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0` (nginx 1.27 with the page baked in) |
-| Install | Day 0 does it. On a node created before, run `sudo k3s kubectl apply -f https://raw.githubusercontent.com/equinix-svc/svc-helm-daihub/main/chat-ui.yaml` |
-| Private package | Day 0 sets `REGISTRY_USER` and `REGISTRY_TOKEN` (section 3). On a node created before, create the pull secret first: `sudo k3s kubectl -n ai-gateway create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=<user> --docker-password=<token with read:packages>`. Not needed once the package is public. |
-| Open | `https://<node>/chat/`, paste a LiteLLM key (the master key, or a virtual key from the admin UI) |
-| Features | model list from `/v1/models`, RAG switch (`rag-augment` guardrail), sample prompts for PII masking, secret redaction and prompt injection. Each answer shows which real model served it (e.g. `groq/qwen/qwen3.8-27b` or `gemini/gemini-3.5-flash-lite` behind `llm-pool`), tokens, latency, cost and the guardrails applied |
-| Update | push a change under `src/chat-ui/`, then on the node `sudo k3s kubectl -n ai-gateway rollout restart deploy/chat-ui` (the manifest pulls the image again) |
+| Open | `https://<node>/chat/`: no key to paste, the page uses the demo key |
+| Demo key | Day 0 generates it, writes it to `/etc/ai-gateway/credentials.env` as `CHAT_DEMO_KEY` and to Secret `chat-demo-key`. Job `chat-demo-key-init` registers it in LiteLLM with the master key (alias `chat-demo`, model `llm-pool` only, budget 5 USD, 30 requests per minute). nginx adds it to requests that carry no key, at `/chat/api/`. The browser never sees it. |
+| Own key | "Use my own key" in the page: the key is sent as is and stays in the tab (`sessionStorage`) |
+| Features | model list, RAG switch (`rag-augment` guardrail), samples (PII masking, secret redaction, prompt injection), links to the web interfaces. Each answer shows which real model served it (e.g. `groq/qwen/qwen3.8-27b` or `gemini/gemini-3.5-flash-lite` behind `llm-pool`), tokens, latency, cost and the guardrails applied |
+| Private package | Day 0 sets `REGISTRY_USER` and `REGISTRY_TOKEN` (section 3). On a node created before, create the pull secret first: `sudo k3s kubectl -n ai-gateway create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=<user> --docker-password=<token with read:packages>` |
+| Install on an existing node | `sudo k3s kubectl -n ai-gateway create secret generic chat-demo-key --from-literal=DEMO_KEY=sk-demo-$(openssl rand -hex 8)`, then `sudo k3s kubectl apply -f https://raw.githubusercontent.com/equinix-svc/svc-helm-daihub/main/chat-ui.yaml` |
+| Update | push a change under `src/chat-ui/`, then `sudo k3s kubectl -n ai-gateway rollout restart deploy/chat-ui` (the manifest pulls the image again) |
 | Remove | `sudo k3s kubectl delete -f` the same URL |
-| Sources | `src/chat-ui/` (`index.html`, `default.conf`, `Dockerfile`) and the manifest `chat-ui.yaml` |
+| Sources | `src/chat-ui/` (`index.html`, `default.conf.template`, `equinix-logo.svg`, `Dockerfile`) and the manifest `chat-ui.yaml` |
 
-The key stays in the browser tab (`sessionStorage`) and goes only to the same host. Tested on the node: the PII sample came back with `<PERSON>`, `<EMAIL_ADDRESS>` and `<PHONE_NUMBER>`, the secret sample was masked, and the injection sample was blocked by LLM Guard (HTTP 400).
+Anyone who can reach `https://<node>/chat/` can use the demo key, within its budget and rate limit. To turn that off, delete Secret `chat-demo-key` and restart `chat-ui`: the page then asks for a key. To change the limits, edit the Job in `chat-ui.yaml`, or change the key in the LiteLLM admin UI. The master key is never exposed by the page.
 
 ## 6. How it works
 

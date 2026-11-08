@@ -1,0 +1,25 @@
+# Serves the chat page at /chat/ and proxies /chat/api/ to LiteLLM. When a request carries no key, the demo key is added
+# (DEMO_KEY comes from Secret chat-demo-key; the browser never sees it). A request with its own key is passed through.
+map $http_authorization $llm_auth {
+  default $http_authorization;
+  ""      "Bearer ${DEMO_KEY}";
+}
+server {
+  listen 80;
+  absolute_redirect off;                    # keep https when the request came in over Traefik's 443
+  location = /chat { return 302 /chat/; }
+  location /chat/api/ {
+    # resolved at request time (and not at startup), so nginx starts even before LiteLLM exists; a full name because
+    # nginx's resolver does not use the search domains
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+    set $llm http://ai-litellm.ai-gateway.svc.cluster.local:4000;
+    rewrite ^/chat/api/(.*)$ /$1 break;
+    proxy_pass $llm;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization $llm_auth;
+    proxy_set_header Host $host;
+    proxy_read_timeout 180s;
+    proxy_buffering off;
+  }
+  location /chat/ { root /usr/share/nginx/html; index index.html; add_header Cache-Control "no-cache"; }
+}
