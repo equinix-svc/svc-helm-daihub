@@ -7,7 +7,7 @@
 #   Equinix predefined: hostname userName publicKey adminPwd ipAddressWithCidr gateway
 #   Custom parameters : GROQ_API_KEY GEMINI_API_KEY   (both optional; at least one is needed for the models to answer)
 #                       REGISTRY_USER REGISTRY_TOKEN   (REQUIRED: GitHub login and read:packages token to pull the private chat page image from ghcr.io)
-#                       ADMIN_EMAIL (required) ADMIN_PASSWORD FQDN   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name with a Let's Encrypt certificate, the contact is ADMIN_EMAIL)
+#                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
 #   Fixed             : K3S_ROLE=single, STACK_REF=main; LiteLLM master key and Langfuse login are generated
 # AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
 # it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
@@ -83,9 +83,9 @@ write_files:
     content: |
       #!/usr/bin/env bash
       # Called by day0-bootstrap.sh with GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY
-      # ADMIN_PASSWORD FQDN STACK_REF STACK_TOKEN in the environment (optional) and REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL (required).
+      # ADMIN_PASSWORD STACK_REF STACK_TOKEN in the environment (optional) and REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN (required).
       set -euo pipefail
-      for v in REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL; do
+      for v in REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN; do
         [ -n "${!v:-}" ] || { echo "missing required parameter $v"; exit 1; }
       done
       K="/usr/local/bin/k3s kubectl"

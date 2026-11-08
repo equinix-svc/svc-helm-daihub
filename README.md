@@ -26,7 +26,7 @@ Only LiteLLM is exposed, on 80/443 through Traefik. Everything else stays inside
 | 1. VM image | Plain `k3s-node` image (`k3s-node.qcow2`) from [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder). Portal settings: `docs/portal-values.md` in that repo. |
 | 2. Container images | The stack uses public images. The chat page image `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0` is private: the node pulls it with `REGISTRY_USER` and `REGISTRY_TOKEN` (required). |
 | 3. Day 0 file | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) for a single node with two parameters, [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) to join a cluster or set credentials. |
-| 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN` and `ADMIN_EMAIL` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` and `FQDN` (optional). Full list: [Day 0 templates](#3-day-0-templates). |
+| 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL` and `FQDN` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` (optional). Create the DNS records for `FQDN` first. Full list: [Day 0 templates](#3-day-0-templates). |
 
 ACL: allow 22 and 80/443. First start takes about 10 minutes (see First start).
 
@@ -39,8 +39,8 @@ Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qc
 
 | Template | Use | Portal parameters |
 |---|---|---|
-| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node, everything else fixed or generated | 7, 3 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster join, chosen credentials, pinned repo version | 14, 3 required |
+| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node, everything else fixed or generated | 7, 4 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster join, chosen credentials, pinned repo version | 14, 4 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
@@ -63,25 +63,25 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `REGISTRY_TOKEN` | yes | yes | - | `ghp_AbCdEf1234567890AbCdEf1234567890AbCd` | Classic personal access token with only `read:packages`. Written to `/etc/rancher/k3s/registries.yaml` (root only) before k3s starts. Expires: set a reminder to rotate it. |
 | `ADMIN_EMAIL` | yes | yes | - | `xxxx@eu.equinix.com` | Login name of the shared admin account (Langfuse, LiteLLM admin UI, chat page login). It must be a real address: it is also the contact for the Let's Encrypt certificates. |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
-| `FQDN` | no | no | empty (IP access, default certificate) | `gw1.example.net` | Public name of the node. Adds `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. Needs DNS records for `<FQDN>` and `langfuse.<FQDN>` (or `*.<FQDN>`) pointing to the node, and port 80 reachable from the internet. |
+| `FQDN` | yes | yes | - | `gw1.example.net` | Public name of the node. Serves `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. Create the DNS records for `<FQDN>` and `langfuse.<FQDN>` (or `*.<FQDN>`) pointing to the node before booting, and keep port 80 reachable from the internet. If DNS is not ready the stack still works by IP and the certificates wait: Traefik retries. |
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
 ## 4. Web interfaces
 
-`<node>` is the node's IP, or the public name when `FQDN` is set (section 3). One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
+`<node>` is the public name (`FQDN`, section 3). Until its certificates are issued, `https://<node-IP>/` also works, with Traefik's default certificate. One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
 
 | Interface | URL | Access | Login |
 |---|---|---|---|
 | Chat page (section 5) | `https://<node>/chat/` | public | browser login prompt (Traefik basic auth), then no key to paste |
 | LiteLLM admin UI | `https://<node>/ui/` | public | the admin account (`UI_USERNAME` and `UI_PASSWORD`) |
 | LiteLLM API | `https://<node>/` | public | `Authorization: Bearer <key>` on `/v1/...` |
-| Langfuse (traces) | `https://langfuse.<FQDN>` with `FQDN`, otherwise `http://localhost:3000` | public with `FQDN`, else SSH tunnel | the admin account |
+| Langfuse (traces) | `https://langfuse.<FQDN>` | public | the admin account |
 | Qdrant dashboard (vectors) | `http://localhost:6333/dashboard` | SSH tunnel | none |
 | SeaweedFS filer (S3 buckets, RAG documents) | `http://localhost:8888` | SSH tunnel | none |
 | rag-service API docs | `http://localhost:8000/docs` | SSH tunnel | none |
 
-Without `FQDN` the certificate is Traefik's default, so a browser warns; accept it. With `FQDN` it is a Let's Encrypt certificate. Qdrant, SeaweedFS and the rag-service have no login of their own, so they are never exposed.
+The certificates are Let's Encrypt certificates for `FQDN`. Qdrant, SeaweedFS and the rag-service have no login of their own, so they are never exposed.
 
 Tunnel (one terminal per interface; replace the service and ports):
 
