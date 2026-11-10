@@ -26,6 +26,8 @@ metadata: { name: traefik, namespace: kube-system }
 spec:
   valuesContent: |-
     persistence: { enabled: true, size: 128Mi }
+    updateStrategy: { type: Recreate, rollingUpdate: null }
+    service: { spec: { publishNotReadyAddresses: true } }
     certificatesResolvers:
       le:
         acme:
