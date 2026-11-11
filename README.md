@@ -57,9 +57,9 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `GROQ_API_KEY` | no (for Groq models) | no (for Groq models) | empty | `gsk_AbCdEf1234567890` | Groq API key. |
 | `GEMINI_API_KEY` | no (for Gemini models) | no (for Gemini models) | empty | `AIzaSyAbCdEf1234567890` | Gemini API key. |
 | `LITELLM_MASTER_KEY` | - | no | generated | `sk-lab-0123456789abcdef` | LiteLLM admin key. |
-| `K3S_ROLE` | - | no | `single` | `single` | `single`: standalone node. `server`: control-plane node. `agent`: k3s worker node that joins an existing cluster; the stack is not installed on it. |
-| `K3S_SERVER_URL` | - | no | empty | `https://10.0.0.5:6443` | Agent only. URL used by an agent to join the k3s cluster. Empty for `single` or the first `server`. |
-| `K3S_TOKEN` | - | no | empty | `K10abc123def456::server:789xyz` | Agent only. Secret used to join the k3s cluster. |
+| `K3S_ROLE` | - | no | `single` | `single` | `single`: standalone node. `server`: control-plane node. With `K3S_SERVER_URL` empty it starts a new cluster and installs the stack; with it set it joins that cluster and the stack is not installed on it. `agent`: k3s worker node that joins an existing cluster; the stack is not installed on it. |
+| `K3S_SERVER_URL` | - | no | empty | `https://10.0.0.5:6443` | Agent or joining server. API address (port 6443) of the first server. Empty for `single` or the first `server`. |
+| `K3S_TOKEN` | - | no | empty | `K10abc123def456::server:789xyz` | Secret of the k3s cluster. Set the same value on the first `server` (it fixes the secret, so you know it before that node exists) and on every agent or joining server. Empty: k3s generates one. |
 | `K3S_TLS_SAN` | - | no | empty | `203.0.113.20` | Extra name or IP in the k3s API server certificate, for `kubectl` or agents reaching port 6443 from outside. Not needed for local `sudo k3s kubectl`. |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 
