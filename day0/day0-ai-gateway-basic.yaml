@@ -8,7 +8,7 @@
 #   Custom parameters : GROQ_API_KEY GEMINI_API_KEY   (both optional; at least one is needed for the models to answer)
 #                       REGISTRY_USER REGISTRY_TOKEN   (REQUIRED: GitHub login and read:packages token to pull the private chat page image from ghcr.io)
 #                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
-#   Fixed             : K3S_ROLE=single; LiteLLM master key and Langfuse login are generated
+#   Fixed             : K3S_ROLE=single; private path on ens5 (10.250.<3rd>.<4th>/16 from the public IP); LiteLLM master key and Langfuse login are generated
 # AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
 # it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
 # (default branch) into the
@@ -66,6 +66,8 @@ write_files:
       K3S_SERVER_URL=''
       K3S_TOKEN=''
       K3S_TLS_SAN=''
+      K3S_PRIVATE_IFACE=''
+      K3S_PRIVATE_IP_CIDR=''
       GROQ_API_KEY='[(${GROQ_API_KEY})]'
       GEMINI_API_KEY='[(${GEMINI_API_KEY})]'
       LITELLM_MASTER_KEY=''
@@ -224,10 +226,27 @@ write_files:
       ROLE="$K3S_ROLE"; [ -n "$ROLE" ] || ROLE=single
       NODE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
 
+      # Private path between nodes (default on): static address on a second interface, default ens5, in 10.250.0.0/16.
+      # The address is built from the public IP (10.250.<3rd>.<4th>/16) so nodes never collide; K3S_PRIVATE_IP_CIDR
+      # overrides it and "none" turns the private path off. k3s then uses it as node-ip, so cluster traffic (flannel, etcd,
+      # API for joining nodes) stays on it. Skipped when the interface does not exist.
+      PRIV_IF="${K3S_PRIVATE_IFACE:-ens5}"; PRIV_IP=""
+      PRIV_CIDR="$K3S_PRIVATE_IP_CIDR"
+      if [ -z "$PRIV_CIDR" ] && [ -n "$NODE_IP" ]; then PRIV_CIDR="10.250.$(echo "$NODE_IP" | cut -d. -f3).$(echo "$NODE_IP" | cut -d. -f4)/16"; fi
+      [ "$PRIV_CIDR" != none ] || PRIV_CIDR=""
+      if [ -n "$PRIV_CIDR" ] && ! ip link show "$PRIV_IF" >/dev/null 2>&1; then echo "private path skipped: no interface $PRIV_IF"; PRIV_CIDR=""; fi
+      if [ -n "$PRIV_CIDR" ]; then
+        PRIV_IP="${PRIV_CIDR%/*}"
+        printf '[Match]\nName=%s\n\n[Network]\nAddress=%s\nConfigureWithoutCarrier=yes\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' \
+          "$PRIV_IF" "$PRIV_CIDR" > /etc/systemd/network/10-private.network
+        networkctl reload; networkctl reconfigure "$PRIV_IF" || true
+        echo "private path: $PRIV_CIDR on $PRIV_IF"
+      fi
+
       mkdir -p /etc/rancher/k3s
       CFG=/etc/rancher/k3s/config.yaml
       : > "$CFG"; chmod 0600 "$CFG"
-      [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP" >> "$CFG"
+      [ -n "${PRIV_IP:-$NODE_IP}" ] && echo "node-ip: ${PRIV_IP:-$NODE_IP}" >> "$CFG"
       [ -n "$K3S_TOKEN" ] && echo "token: \"$K3S_TOKEN\"" >> "$CFG"
 
       case "$ROLE" in
