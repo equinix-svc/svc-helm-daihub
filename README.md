@@ -61,13 +61,13 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `K3S_SERVER_URL` | - | no | empty | `https://10.0.0.5:6443` | Agent or joining server. API address (port 6443) of the first server. Empty for `single` or the first `server`. |
 | `K3S_TOKEN` | - | no | empty | `K10abc123def456::server:789xyz` | Secret of the k3s cluster. Set the same value on the first `server` (it fixes the secret, so you know it before that node exists) and on every agent or joining server. Empty: k3s generates one. |
 | `K3S_TLS_SAN` | - | no | empty | `203.0.113.20` | Extra name or IP in the k3s API server certificate, for `kubectl` or agents reaching port 6443 from outside. Not needed for local `sudo k3s kubectl`. |
-| `K3S_PRIVATE_IFACE` | fixed `ens5` | no | `ens5` | `ens5` | Interface used for the private path between nodes. Skipped when it does not exist. |
+| `K3S_PRIVATE_IFACE` | fixed `ens4` | no | `ens4` | `ens4` | Interface used for the private path between nodes. Skipped when it does not exist. |
 | `K3S_PRIVATE_IP_CIDR` | fixed (derived) | no | `10.250.<3rd>.<4th>/16` from the node's public IP | `10.250.0.11/24` | Static private address on the private interface. By default derived from the public IP (public `87.237.190.93` gives `10.250.190.93/16`), so nodes do not collide. `none` turns the private path off. |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
-Private path: by default each node also configures `ens5` with a private address in `10.250.0.0/16` and uses it as the k3s `node-ip`, so cluster traffic (flannel, etcd, the API for joining nodes) stays on it. Connect the `ens5` interfaces of the nodes (device link or Fabric connection) so they share this subnet; joining nodes then use `K3S_SERVER_URL=https://<first node's private IP>:6443`, and port 6443 does not need to be open on the public ACL. The web interfaces stay on the public address.
+Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16` and uses it as the k3s `node-ip`, so cluster traffic (flannel, etcd, the API for joining nodes) stays on it. Connect the `ens4` interfaces of the nodes (device link or Fabric connection) so they share this subnet; joining nodes then use `K3S_SERVER_URL=https://<first node's private IP>:6443`, and port 6443 does not need to be open on the public ACL. The web interfaces stay on the public address. `ens5` (encryptor master to slave) and `ens6` (KME to KME) are reserved for other uses and are not configured here.
 
 ## 4. Web interfaces
 

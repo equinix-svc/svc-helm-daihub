@@ -5,7 +5,7 @@
 # Placeholders use the Equinix inline syntax (case-sensitive names), see docs/portal-values.md in svc-ne-byoi-builder.
 #   Equinix predefined: hostname userName publicKey adminPwd ipAddressWithCidr gateway
 #   Custom parameters : K3S_ROLE K3S_SERVER_URL K3S_TOKEN K3S_TLS_SAN
-#                       K3S_PRIVATE_IFACE K3S_PRIVATE_IP_CIDR   (private path, on by default: ens5, 10.250.<3rd>.<4th>/16 from the public IP; "none" turns it off)
+#                       K3S_PRIVATE_IFACE K3S_PRIVATE_IP_CIDR   (private path, on by default: ens4, 10.250.<3rd>.<4th>/16 from the public IP; "none" turns it off)
 #                       GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY REGISTRY_USER REGISTRY_TOKEN   (REGISTRY_* required, the rest optional)
 #                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
 # AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
@@ -225,11 +225,11 @@ write_files:
       ROLE="$K3S_ROLE"; [ -n "$ROLE" ] || ROLE=single
       NODE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
 
-      # Private path between nodes (default on): static address on a second interface, default ens5, in 10.250.0.0/16.
+      # Private path between nodes (default on): static address on a second interface, default ens4, in 10.250.0.0/16.
       # The address is built from the public IP (10.250.<3rd>.<4th>/16) so nodes never collide; K3S_PRIVATE_IP_CIDR
       # overrides it and "none" turns the private path off. k3s then uses it as node-ip, so cluster traffic (flannel, etcd,
       # API for joining nodes) stays on it. Skipped when the interface does not exist.
-      PRIV_IF="${K3S_PRIVATE_IFACE:-ens5}"; PRIV_IP=""
+      PRIV_IF="${K3S_PRIVATE_IFACE:-ens4}"; PRIV_IP=""
       PRIV_CIDR="$K3S_PRIVATE_IP_CIDR"
       if [ -z "$PRIV_CIDR" ] && [ -n "$NODE_IP" ]; then PRIV_CIDR="10.250.$(echo "$NODE_IP" | cut -d. -f3).$(echo "$NODE_IP" | cut -d. -f4)/16"; fi
       [ "$PRIV_CIDR" != none ] || PRIV_CIDR=""
