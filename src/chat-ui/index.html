@@ -66,6 +66,10 @@
   .msg.user { align-self:flex-end; background:#4a4c51; color:#fff; }
   .msg.bot { align-self:flex-start; background:var(--row); color:var(--row-text); border-left:4px solid var(--red); }
   .msg.err { align-self:flex-start; background:#fff; color:var(--red-dark); border-left:4px solid var(--red); }
+  .msg.guard { align-self:flex-start; background:#fff; color:var(--row-text); border-left:4px solid var(--orange); }
+  .guard .gh { display:flex; align-items:center; gap:8px; font-weight:600; color:var(--red-dark); }
+  .guard .gh svg { width:18px; height:18px; flex:none; }
+  .guard .gd { margin-top:4px; }
   .meta { margin-top:8px; font-size:12px; color:var(--row-dim); } .meta b { color:#1d1d1d; font-weight:600; }
   .hint { color:#c9c6cf; max-width:640px; }
   .hint h1 { font-size:22px; font-weight:500; color:#fff; margin:0 0 8px; }
@@ -148,6 +152,23 @@ function add(cls, text, meta) {
   if (meta) { const m = document.createElement('div'); m.className = 'meta'; m.append(...meta); d.appendChild(m); }
   log.appendChild(d); scrollEl.scrollTop = scrollEl.scrollHeight; return d;
 }
+// LiteLLM answers a blocked request with HTTP 400 and "<guardrail> BLOCKED: <reason>" (see src/litellm/llm_guard_guardrail.py).
+const GUARDS = {'llm-guard': 'LLM Guard', 'presidio': 'Presidio'};
+function parseGuard(msg) {
+  const m = /\b([a-z][\w-]*)\s+BLOCKED:\s*([^\n]+)/i.exec(String(msg || '')); if (!m) return null;
+  const key = m[1].toLowerCase(); return {key, label: GUARDS[key] || m[1], reason: m[2].trim()};
+}
+function addGuard(g, status, ms) {
+  const d = document.createElement('div'); d.className = 'msg guard';
+  const h = document.createElement('div'); h.className = 'gh';
+  h.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>';
+  h.append('Guardrail triggered: ' + g.label);
+  const t = document.createElement('div'); t.className = 'gd';
+  t.textContent = g.reason.charAt(0).toUpperCase() + g.reason.slice(1) + '. The request was blocked before it reached the model.';
+  const m = document.createElement('div'); m.className = 'meta';
+  m.append('guardrail ', bold(g.key), ' · action ', bold('blocked'), ' · HTTP ' + status + ' · ' + ms + ' ms');
+  d.append(h, t, m); log.appendChild(d); scrollEl.scrollTop = scrollEl.scrollHeight; return d;
+}
 function intro() {
   log.innerHTML = '';
   const h = document.createElement('div'); h.className = 'hint';
@@ -221,7 +242,9 @@ async function send() {
     if (!r.ok) {
       history.pop();
       const msg = (data.error && (data.error.message || data.error)) || r.statusText;
-      add('err', (r.status === 401 ? 'Unauthorized: check the key. ' : r.status === 429 ? 'Rate or budget limit reached for this key. ' : 'Blocked or failed (' + r.status + '): ') + (typeof msg === 'string' ? msg : JSON.stringify(msg)));
+      const guard = parseGuard(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      if (guard) { addGuard(guard, r.status, Math.round(performance.now() - t0)); sendEl.disabled = false; textEl.focus(); return; }
+      add('err',(r.status === 401 ? 'Unauthorized: check the key. ' : r.status === 429 ? 'Rate or budget limit reached for this key. ' : 'Blocked or failed (' + r.status + '): ') + (typeof msg === 'string' ? msg : JSON.stringify(msg)));
     } else {
       const reply = data.choices[0].message.content || '';
       history.push({role: 'assistant', content: reply});
