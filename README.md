@@ -67,7 +67,7 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
-Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16` and uses it as the k3s `node-ip`, so cluster traffic (flannel, etcd, the API for joining nodes) stays on it. Connect the `ens4` interfaces of the nodes (device link or Fabric connection) so they share this subnet; joining nodes then use `K3S_SERVER_URL=https://<first node's private IP>:6443`, and port 6443 does not need to be open on the public ACL. The web interfaces stay on the public address. `ens5` (encryptor master to slave) and `ens6` (KME to KME) are reserved for other uses and are not configured here.
+Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16` and uses it as the k3s `node-ip` and `flannel-iface`, so cluster traffic (flannel, etcd, the API for joining nodes) stays on it. Connect the `ens4` interfaces of the nodes (device link or Fabric connection) so they share this subnet; joining nodes then use `K3S_SERVER_URL=https://<first node's private IP>:6443`, and port 6443 does not need to be open on the public ACL. The web interfaces stay on the public address. `ens5` (encryptor master to slave) and `ens6` (KME to KME) are reserved for other uses and are not configured here.
 
 ## 4. Web interfaces
 

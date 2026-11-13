@@ -228,8 +228,8 @@ write_files:
 
       # Private path between nodes (default on): static address on a second interface, default ens4, in 10.250.0.0/16.
       # The address is built from the public IP (10.250.<3rd>.<4th>/16) so nodes never collide; K3S_PRIVATE_IP_CIDR
-      # overrides it and "none" turns the private path off. k3s then uses it as node-ip, so cluster traffic (flannel, etcd,
-      # API for joining nodes) stays on it. Skipped when the interface does not exist.
+      # overrides it and "none" turns the private path off. k3s then uses it as node-ip and flannel interface, so cluster traffic
+      # (flannel, etcd, API for joining nodes) stays on it. Skipped when the interface does not exist.
       PRIV_IF="${K3S_PRIVATE_IFACE:-ens4}"; PRIV_IP=""
       PRIV_CIDR="$K3S_PRIVATE_IP_CIDR"
       if [ -z "$PRIV_CIDR" ] && [ -n "$NODE_IP" ]; then PRIV_CIDR="10.250.$(echo "$NODE_IP" | cut -d. -f3).$(echo "$NODE_IP" | cut -d. -f4)/16"; fi
@@ -247,6 +247,8 @@ write_files:
       CFG=/etc/rancher/k3s/config.yaml
       : > "$CFG"; chmod 0600 "$CFG"
       [ -n "${PRIV_IP:-$NODE_IP}" ] && echo "node-ip: ${PRIV_IP:-$NODE_IP}" >> "$CFG"
+      # flannel does not follow node-ip: without this it keeps the VXLAN on the public interface
+      [ -z "$PRIV_IP" ] || echo "flannel-iface: $PRIV_IF" >> "$CFG"
       [ -n "$K3S_TOKEN" ] && echo "token: \"$K3S_TOKEN\"" >> "$CFG"
 
       case "$ROLE" in
