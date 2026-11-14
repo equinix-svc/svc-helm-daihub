@@ -248,15 +248,20 @@ write_files:
       [ -n "${PRIV_IP:-$NODE_IP}" ] && echo "node-ip: ${PRIV_IP:-$NODE_IP}" >> "$CFG"
       # flannel does not follow node-ip: without this it keeps the VXLAN on the public interface
       [ -z "$PRIV_IP" ] || echo "flannel-iface: $PRIV_IF" >> "$CFG"
+      # Cluster services on the private address only: the kubelet (10250) here, the API (6443) on servers below.
+      # k3s keeps its own loopback listener, so kubectl on the node still works.
+      [ -z "$PRIV_IP" ] || printf 'kubelet-arg:\n  - "address=%s"\n' "$PRIV_IP" >> "$CFG"
       [ -n "$K3S_TOKEN" ] && echo "token: \"$K3S_TOKEN\"" >> "$CFG"
 
       case "$ROLE" in
         single)
           echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
+          [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
           [ -n "$K3S_TLS_SAN" ] && printf 'tls-san:\n  - "%s"\n' "$K3S_TLS_SAN" >> "$CFG"
           UNIT=k3s ;;
         server)
           echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
+          [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
           [ -n "$K3S_TLS_SAN" ] && printf 'tls-san:\n  - "%s"\n' "$K3S_TLS_SAN" >> "$CFG"
           if [ -n "$K3S_SERVER_URL" ]; then echo "server: \"$K3S_SERVER_URL\"" >> "$CFG"; else echo "cluster-init: true" >> "$CFG"; fi
           UNIT=k3s ;;
