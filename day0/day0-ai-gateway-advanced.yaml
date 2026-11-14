@@ -281,23 +281,35 @@ write_files:
         echo "registry credentials for ghcr.io written"
       fi
 
+      # A joining node can start before its server is reachable (for example the private link is not up yet). systemd
+      # keeps retrying the unit (Restart=always), so a failed first start must not abort Day 0.
       systemctl daemon-reload
-      systemctl enable --now "$UNIT"
+      systemctl enable "$UNIT"
+      systemctl start "$UNIT" || echo "first start of $UNIT failed (the server may not be reachable yet); systemd keeps retrying"
 
       if [ "$UNIT" = k3s ]; then
-        for i in $(seq 1 60); do
-          /usr/local/bin/k3s kubectl get nodes 2>/dev/null | grep -qw Ready && break
+        # a joining server may wait for its private link: up to 30 minutes instead of 5
+        WAIT_N=60; [ -z "$K3S_SERVER_URL" ] || WAIT_N=360
+        K3S_READY=no
+        for i in $(seq 1 "$WAIT_N"); do
+          if /usr/local/bin/k3s kubectl get nodes 2>/dev/null | grep -qw Ready; then K3S_READY=yes; break; fi
           sleep 5
         done
+        echo "k3s ready: $K3S_READY"
         /usr/local/bin/k3s kubectl get nodes -o wide || true
-        # make kubectl usable for the portal user
-        for u in "$USER_NAME"; do
-          if [ -n "$u" ] && id "$u" >/dev/null 2>&1; then
-            uh="$(getent passwd "$u" | cut -d: -f6)"; ug="$(id -gn "$u")"
-            install -d -o "$u" -g "$ug" -m 0700 "$uh/.kube"
-            install -o "$u" -g "$ug" -m 0600 /etc/rancher/k3s/k3s.yaml "$uh/.kube/config"
-          fi
-        done
+        # make kubectl usable for the portal user (k3s's kubectl otherwise reads the root-only /etc/rancher/k3s/k3s.yaml)
+        if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+          for u in "$USER_NAME"; do
+            if [ -n "$u" ] && id "$u" >/dev/null 2>&1; then
+              uh="$(getent passwd "$u" | cut -d: -f6)"; ug="$(id -gn "$u")"
+              install -d -o "$u" -g "$ug" -m 0700 "$uh/.kube"
+              install -o "$u" -g "$ug" -m 0600 /etc/rancher/k3s/k3s.yaml "$uh/.kube/config"
+            fi
+          done
+          printf 'export KUBECONFIG=$HOME/.kube/config\n' > /etc/profile.d/k3s-kubeconfig.sh
+        else
+          echo "no /etc/rancher/k3s/k3s.yaml yet: kubeconfig for $USER_NAME not installed"
+        fi
       fi
 
       # AI gateway stack: single node or first server only (agents and joining servers do not deploy it)
