@@ -64,6 +64,7 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `K3S_PRIVATE_IFACE` | fixed `ens4` | no | `ens4` | `ens4` | Interface used for the private path between nodes. Skipped when it does not exist. |
 | `K3S_PRIVATE_IP_CIDR` | fixed (derived) | no | `10.250.<3rd>.<4th>/16` from the node's public IP | `10.250.0.11/24` | Static private address on the private interface. By default derived from the public IP (public `87.237.190.93` gives `10.250.190.93/16`), so nodes do not collide. `none` turns the private path off. |
 | `K3S_API_VIP` | fixed `10.250.0.10` | no | `10.250.0.10` | `10.250.0.10` | Address shared by the control-plane nodes on the private network, held by one of them at a time (kube-vip). Used as `K3S_SERVER_URL` by joining nodes. Only with the private path on; `none` turns it off. Must be unused on the `ens4` network. |
+| `R53_ZONE_ID` | - | no | empty | `Z20G7WHAWA4AIZ` | Route 53 hosted zone of `FQDN`. Set: the shared-name mode of [section 4](#shared-name-and-certificates): one certificate by DNS-01, Traefik on every node, no wait for DNS. Empty: one node, Traefik asks Let's Encrypt itself (HTTP-01). |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
@@ -123,6 +124,37 @@ flowchart LR
 
 Create node 1 first and wait until it is Ready and the API address answers, then create the others. A node that starts before its `ens4` link is up keeps retrying for up to 30 minutes.
 
+### Shared name and certificates
+
+One name for the whole cluster, served by every node, with one certificate. Set `FQDN` to the shared name (for example `svc-dai.eu.solutionvalidation.center`) and `R53_ZONE_ID` to its Route 53 hosted zone on node 1.
+
+| Piece | What it does |
+|---|---|
+| cert-manager | requests one certificate for `<FQDN>` and `langfuse.<FQDN>` by DNS-01 on Route 53 and keeps it in Secret `dai-tls` |
+| Traefik | runs on every node (a DaemonSet) and reads `dai-tls` from the Ingresses, so any node can serve the name |
+| DNS | one A record per node's public address, for `<FQDN>` and `langfuse.<FQDN>`; you create them |
+
+After node 1 is up:
+
+1. Create an IAM user that can only change the two validation records, and load its key into the cluster. Never put it through Day 0 or a chat:
+   ```bash
+   sudo k3s kubectl -n cert-manager create secret generic route53-credentials \
+     --from-literal=access-key-id=<ID> --from-literal=secret-access-key=<SECRET>
+   ```
+   ```json
+   { "Version": "2012-10-17", "Statement": [
+     { "Effect": "Allow", "Action": "route53:GetChange", "Resource": "arn:aws:route53:::change/*" },
+     { "Effect": "Allow", "Action": "route53:ListHostedZonesByName", "Resource": "*" },
+     { "Effect": "Allow", "Action": ["route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets"],
+       "Resource": "arn:aws:route53:::hostedzone/<ZONE_ID>",
+       "Condition": { "ForAllValues:StringEquals": { "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+         "_acme-challenge.<FQDN>", "_acme-challenge.langfuse.<FQDN>" ] } } } ] }
+   ```
+2. Create the DNS A records.
+3. Check: `sudo k3s kubectl -n ai-gateway get certificate dai-tls` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate.
+
+The certificate does not depend on any node's address, so a rebuilt node only needs its A record updated. Per-node names such as `svc-dai-par01...` are not covered by this certificate.
+
 ### Check
 
 - `kubectl get nodes`: three nodes `Ready`, roles `control-plane,etcd`.
@@ -142,7 +174,7 @@ A two-node cluster has no spare: any failure is the last row.
 
 ### Not covered yet
 
-- **Web entry:** Traefik runs as one pod, so the web interfaces depend on that node. Each node has its own public address and name.
+- **Web entry:** without `R53_ZONE_ID`, Traefik runs as one pod, so the web interfaces depend on that node. With it, see the shared name above.
 - **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk.
 
 ## 5. Web interfaces
@@ -241,6 +273,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 - A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
 - The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
 - Both Day 0 templates (about 18.5 KB each) render and pass a shell syntax check.
+- The shared-name mode: `scripts/fqdn.sh` writes manifests that a real API server accepts (with the cert-manager CRDs), the cert-manager and Traefik charts render, and Traefik becomes a DaemonSet without the ACME resolver or its volume. Not tested: a certificate issued on Route 53, and Traefik on every node of a live cluster.
 - Two nodes on a Fabric Network: the private path, the API and kubelet on the private address, and the shared API address with certificate verification through it. Three nodes and the failover of the address are not tested.
 
 ## 11. Findings and limits

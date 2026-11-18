@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# fqdn.sh - public name with a signed certificate (Let's Encrypt through Traefik). Run by Day 0 when FQDN is set.
+# fqdn.sh - public name with a signed certificate (Let's Encrypt). Run by Day 0 when FQDN is set.
+# Two modes. With R53_ZONE_ID set (shared name, several nodes): cert-manager issues ONE certificate by DNS-01 on Route 53, kept in a
+# Secret that every node's Traefik reads; Traefik runs on every node; nothing waits for DNS. The Route 53 key is not handled here: create
+# Secret route53-credentials in namespace cert-manager (access-key-id, secret-access-key). ACME_STAGING=1 uses the Let's Encrypt staging CA.
+# Without R53_ZONE_ID (one node): Traefik asks Let's Encrypt itself (HTTP-01), as described below.
 # Needs in the environment: FQDN, ADMIN_EMAIL (the certificate contact), MAN (the k3s manifests directory).
 # The node's public IP is only known after creation, so the DNS records come later. This script therefore writes
 # traefik-config.yaml (Let's Encrypt resolver, persistent certificate store), langfuse-config.yaml (Langfuse login URL) and
@@ -19,6 +23,136 @@ UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
   mkdir -p "$PENDING" "$CONF_DIR"
   chmod 0755 "$CONF_DIR"          # the login banner (run as the login user) reads fqdn and dns-wait.state; secrets stay 0600 files
   rm -f "$MAN/traefik-config.yaml" "$MAN/langfuse-config.yaml" "$MAN/fqdn-ingress.yaml"
+  if [ -n "${R53_ZONE_ID:-}" ]; then
+    # ---- DNS-01 mode: cert-manager, Traefik on every node, no DNS wait
+    printf '%s' "$R53_ZONE_ID" | grep -Eq '^[A-Z0-9]{10,32}$' || { echo "R53_ZONE_ID is not a hosted zone id: $R53_ZONE_ID"; exit 1; }
+    ISSUER=letsencrypt-dns; [ -z "${ACME_STAGING:-}" ] || ISSUER=letsencrypt-dns-staging
+    rm -f "$MAN/cert-manager.yaml" "$MAN/dai-certificate.yaml" "$MAN/traefik-config.yaml"
+    cat > "$MAN/cert-manager.yaml" <<FQDNEOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata: { name: cert-manager, namespace: kube-system }
+spec:
+  repo: https://charts.jetstack.io
+  chart: cert-manager
+  version: v1.16.2
+  targetNamespace: cert-manager
+  createNamespace: true
+  valuesContent: |-
+    crds: { enabled: true }
+    resources: { requests: { cpu: 10m, memory: 48Mi } }
+    webhook: { resources: { requests: { cpu: 10m, memory: 32Mi } } }
+    cainjector: { resources: { requests: { cpu: 10m, memory: 48Mi } } }
+---
+# Let's Encrypt through DNS-01 on Route 53. The key is read from Secret route53-credentials in namespace cert-manager.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata: { name: letsencrypt-dns }
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: "$ADMIN_EMAIL"
+    privateKeySecretRef: { name: letsencrypt-dns-account }
+    solvers:
+      - dns01:
+          route53:
+            region: us-east-1
+            hostedZoneID: "$R53_ZONE_ID"
+            accessKeyIDSecretRef: { name: route53-credentials, key: access-key-id }
+            secretAccessKeySecretRef: { name: route53-credentials, key: secret-access-key }
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata: { name: letsencrypt-dns-staging }
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: "$ADMIN_EMAIL"
+    privateKeySecretRef: { name: letsencrypt-dns-staging-account }
+    solvers:
+      - dns01:
+          route53:
+            region: us-east-1
+            hostedZoneID: "$R53_ZONE_ID"
+            accessKeyIDSecretRef: { name: route53-credentials, key: access-key-id }
+            secretAccessKeySecretRef: { name: route53-credentials, key: secret-access-key }
+FQDNEOF
+    cat > "$MAN/dai-certificate.yaml" <<FQDNEOF
+# One certificate for both names, in a Secret every Traefik reads. Pending until Secret route53-credentials exists.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: dai-tls, namespace: ai-gateway }
+spec:
+  secretName: dai-tls
+  issuerRef: { name: $ISSUER, kind: ClusterIssuer }
+  dnsNames: ["$FQDN", "langfuse.$FQDN"]
+FQDNEOF
+    cat > "$MAN/traefik-config.yaml" <<FQDNEOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata: { name: traefik, namespace: kube-system }
+spec:
+  valuesContent: |-
+    deployment: { kind: DaemonSet }
+    updateStrategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 1, maxSurge: 0 } }
+FQDNEOF
+    cat > "$MAN/langfuse-config.yaml" <<FQDNEOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata: { name: langfuse, namespace: kube-system }
+spec:
+  valuesContent: |-
+    langfuse:
+      nextauth:
+        url: https://langfuse.$FQDN
+FQDNEOF
+    cat > "$MAN/fqdn-ingress.yaml" <<FQDNEOF
+# https://$FQDN/ (LiteLLM API and admin UI), /chat (login), and https://langfuse.$FQDN/ ; certificate from Secret dai-tls
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fqdn-litellm
+  namespace: ai-gateway
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  tls: [{ hosts: ["$FQDN"], secretName: dai-tls }]
+  rules:
+    - host: "$FQDN"
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: ai-litellm, port: { number: 4000 } } } }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fqdn-chat
+  namespace: ai-gateway
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: ai-gateway-basic-auth@kubernetescrd
+spec:
+  tls: [{ hosts: ["$FQDN"], secretName: dai-tls }]
+  rules:
+    - host: "$FQDN"
+      http: { paths: [{ path: /chat, pathType: Prefix, backend: { service: { name: chat-ui, port: { number: 80 } } } }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fqdn-langfuse
+  namespace: ai-gateway
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  tls: [{ hosts: ["langfuse.$FQDN"], secretName: dai-tls }]
+  rules:
+    - host: "langfuse.$FQDN"
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: langfuse-web, port: { number: 3000 } } } }] }
+FQDNEOF
+    printf '%s\n' "$FQDN" > ${FQDN_FILE:-$CONF_DIR/fqdn}
+    echo "ready dns-01 $(date -Is)" > "$CONF_DIR/dns-wait.state"
+    echo "FQDN $FQDN: shared name by DNS-01 ($ISSUER). Create Secret route53-credentials in namespace cert-manager, and one A record per node for $FQDN and langfuse.$FQDN"
+    exit 0
+  fi
   cat > "$PENDING/traefik-config.yaml" <<FQDNEOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig

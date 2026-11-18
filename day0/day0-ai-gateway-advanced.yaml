@@ -5,6 +5,7 @@
 # Placeholders use the Equinix inline syntax (case-sensitive names), see docs/portal-values.md in svc-ne-byoi-builder.
 #   Equinix predefined: hostname userName publicKey adminPwd ipAddressWithCidr gateway
 #   Custom parameters : K3S_ROLE K3S_SERVER_URL K3S_TOKEN K3S_TLS_SAN
+#                       R53_ZONE_ID   (Route 53 hosted zone of FQDN: certificate by DNS-01 and Traefik on every node, see README section 4; empty = one node, HTTP-01)
 #                       K3S_API_VIP   (API address shared by the servers: 10.250.0.10 by default with the private path; "none" turns it off;
 #                       joining nodes then use K3S_SERVER_URL=https://10.250.0.10:6443)
 #                       K3S_PRIVATE_IFACE K3S_PRIVATE_IP_CIDR   (private path, on by default: ens4, 10.250.<3rd>.<4th>/16 from the public IP; "none" turns it off)
@@ -78,6 +79,7 @@ write_files:
       ADMIN_EMAIL='[(${ADMIN_EMAIL})]'
       ADMIN_PASSWORD='[(${ADMIN_PASSWORD})]'
       FQDN='[(${FQDN})]'
+      R53_ZONE_ID='[(${R53_ZONE_ID})]'
 
   - path: /usr/local/bin/day0-ai-stack.sh
     owner: root:root
@@ -155,7 +157,7 @@ write_files:
       if [ -n "${FQDN:-}" ]; then
         curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
           "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/fqdn.sh" -o /usr/local/bin/day0-fqdn.sh \
-          && MAN="$MAN" FQDN="$FQDN" ADMIN_EMAIL="$LF_EMAIL" bash /usr/local/bin/day0-fqdn.sh \
+          && MAN="$MAN" FQDN="$FQDN" ADMIN_EMAIL="$LF_EMAIL" R53_ZONE_ID="${R53_ZONE_ID:-}" bash /usr/local/bin/day0-fqdn.sh \
           || { echo "FQDN setup failed (see above)"; exit 1; }
       fi
 
@@ -342,7 +344,7 @@ write_files:
         echo "installing the AI gateway stack"
         GROQ_API_KEY="$GROQ_API_KEY" GEMINI_API_KEY="$GEMINI_API_KEY" LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
                 \
-        ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" FQDN="$FQDN" \
+        ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" FQDN="$FQDN" R53_ZONE_ID="$R53_ZONE_ID" \
         REGISTRY_USER="$REGISTRY_USER" REGISTRY_TOKEN="$REGISTRY_TOKEN" /usr/local/bin/day0-ai-stack.sh \
           || echo "AI gateway install failed: see this log"
       fi
