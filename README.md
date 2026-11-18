@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="DAI Hub" width="120">
 
-AI gateway stack for a single k3s node, as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images and no registry to maintain. It has been validated statically (section 9) but **not yet deployed on a device**, so first-boot behaviour is untested.
+AI gateway stack for a k3s node or a three-node k3s cluster (section 4), as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images and no registry to maintain. It has been deployed on two Network Edge devices; section 10 lists what was tested. The three-node cluster is not tested yet.
 
 ## 1. Stack
 
@@ -68,15 +68,90 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
-Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16` and uses it as the k3s `node-ip` and `flannel-iface`, so cluster traffic (flannel, etcd, the API for joining nodes) stays on it. k3s also listens on the private address only: `bind-address` for the API (6443, plus loopback for k3s itself) on servers and `kubelet-arg address=` for the kubelet (10250); etcd already follows `node-ip`. Only the flannel VXLAN socket (UDP 8472) cannot be restricted in the k3s config: keep it closed in the Equinix ACL. Attach the `ens4` interface (Network Edge `interface2`) of every node to one Fabric Network (EVPLAN, any-to-any), so they share this Layer 2 subnet; a third node is one more connection to the same network. Pick the interface by hand when creating the connection (portal or Terraform): the Fabric MCP tool ignores the interface you give it and may attach `interface3` or `interface4`, which are the encryptor interfaces; joining nodes then use `K3S_SERVER_URL=https://<first node's private IP>:6443`, and port 6443 does not need to be open on the public ACL. Shared API address: each server (`single` or `server`) also runs [`scripts/api-vip.sh`](scripts/api-vip.sh), which Day 0 downloads once k3s is Ready. It installs kube-vip as a static pod, which holds `K3S_API_VIP` on `ens4` on one node at a time, and one forwarding rule (`k3s-api-vip.service`) that sends the address to this node's own API. The API keeps listening on the node address only, and the address is in the API certificate (`tls-san`). With two servers the address cannot move when one is down, because etcd then loses its majority: failover needs a third server. The web interfaces stay on the public address. `ens5` (encryptor master to slave) and `ens6` (KME to KME) are reserved for other uses and are not configured here.
+Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16`, used as the k3s `node-ip` and `flannel-iface`. The cluster mode built on it is described in [section 4](#4-three-node-cluster).
 
-## 4. Web interfaces
+## 4. Three-node cluster
+
+Three control-plane nodes (`K3S_ROLE=server`, embedded etcd) on one private Layer 2 network. The API and the cluster keep working when one node is lost, because two of three etcd members are still a majority.
+
+```mermaid
+flowchart LR
+  C["Joining nodes<br/>and kubectl"] -- "https://10.250.0.10:6443" --> V
+  subgraph NET["Fabric Network (EVPLAN) on ens4, 10.250.0.0/16"]
+    V(["API address<br/>held by one node at a time"])
+    N1["Node 1<br/>server, etcd"]
+    N2["Node 2<br/>server, etcd"]
+    N3["Node 3<br/>server, etcd"]
+    V -.-> N1
+  end
+  N1 <-- "etcd, flannel" --> N2
+  N2 <-- "etcd, flannel" --> N3
+  N1 <-- "etcd, flannel" --> N3
+```
+
+### What listens where
+
+| What | How | Listens on |
+|---|---|---|
+| Cluster traffic (flannel, etcd, kubelet to API) | `node-ip` and `flannel-iface` set to the `ens4` address | `ens4` |
+| API (6443) | `bind-address` on servers | the node's private address and loopback |
+| Kubelet (10250) | `kubelet-arg address=` | the private address |
+| etcd (2379, 2380) | follows `node-ip` | the private address and loopback |
+| Shared API address | [`scripts/api-vip.sh`](scripts/api-vip.sh), downloaded by Day 0 once k3s is Ready: kube-vip (static pod, ARP) holds `K3S_API_VIP` on `ens4`, and `k3s-api-vip.service` forwards it to the node's own API. The address is in the API certificate (`tls-san`) | `10.250.0.10` on one node at a time |
+| flannel VXLAN (UDP 8472) | cannot be restricted in the k3s config | every interface: keep it closed in the Equinix ACL |
+| Web (80, 443) | ServiceLB | each node's public address |
+
+### Network
+
+| NIC | Portal interface | Use |
+|---|---|---|
+| `ens3` | interface1 | public: SSH and the web interfaces |
+| `ens4` | interface2 | cluster traffic, one subnet for all nodes |
+| `ens5`, `ens6` | interface3, interface4 | reserved for the encryptor (master to slave, KME to KME), not configured here |
+
+1. Create one Fabric Network (EVPLAN) in the metro.
+2. Connect the `ens4` interface (`interface2`) of every node to it. A third node is one more connection.
+3. Pick the interface by hand when you create the connection (portal or Terraform). The Fabric MCP tool ignores the interface you give it and may attach `interface3` or `interface4`, the encryptor interfaces.
+4. ACL: allow 22 and 80/443. Port 6443 does not need to be open on the public side.
+
+### Create the nodes
+
+| Node | `K3S_ROLE` | `K3S_SERVER_URL` | `K3S_TOKEN` | Other parameters |
+|---|---|---|---|---|
+| 1 | `server` | empty: it starts the cluster and installs the stack | a secret you choose | `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL`, `FQDN`, the API keys |
+| 2 and 3 | `server` | `https://10.250.0.10:6443` | the same value as node 1 | none |
+
+Create node 1 first and wait until it is Ready and the API address answers, then create the others. A node that starts before its `ens4` link is up keeps retrying for up to 30 minutes.
+
+### Check
+
+- `kubectl get nodes`: three nodes `Ready`, roles `control-plane,etcd`.
+- `ip -br a show ens4` on each node: the API address appears on exactly one.
+- `curl -sk https://10.250.0.10:6443/healthz` from a node answers `401` (reachable, login required).
+- From the internet, 6443 and 10250 are closed.
+
+### When a node fails
+
+| Servers up | etcd majority | API | API address |
+|---|---|---|---|
+| 3 of 3 | yes | works | on one node |
+| 2 of 3 | yes | works | moves to a live node (not tested yet) |
+| 1 of 3, or 1 of 2 | no | stops; running pods keep serving | cannot move: kube-vip needs the API to choose a holder |
+
+A two-node cluster has no spare: any failure is the last row.
+
+### Not covered yet
+
+- **Web entry:** Traefik runs as one pod, so the web interfaces depend on that node. Each node has its own public address and name.
+- **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk.
+
+## 5. Web interfaces
 
 `<node>` is the public name (`FQDN`, section 3). Until the DNS records exist and the certificates are issued, `https://<node-IP>/` also works, with Traefik's default certificate. One admin account (`ADMIN_EMAIL`, and `ADMIN_PASSWORD` generated when empty) is the login for the chat page, the LiteLLM admin UI and Langfuse. It is in `/etc/ai-gateway/credentials.env`.
 
 | Interface | URL | Access | Login |
 |---|---|---|---|
-| Chat page (section 5) | `https://<node>/chat/` | public | browser login prompt (Traefik basic auth), then no key to paste |
+| Chat page (section 6) | `https://<node>/chat/` | public | browser login prompt (Traefik basic auth), then no key to paste |
 | LiteLLM admin UI | `https://<node>/ui/` | public | the admin account (`UI_USERNAME` and `UI_PASSWORD`) |
 | LiteLLM API | `https://<node>/` | public | `Authorization: Bearer <key>` on `/v1/...` |
 | Langfuse (traces) | `https://langfuse.<FQDN>` | public | the admin account |
@@ -95,7 +170,7 @@ ssh -L 3000:localhost:3000 <user>@<node> "sudo k3s kubectl -n ai-gateway port-fo
 
 The login banner (`scripts/motd.sh`, installed by Day 0 in `/etc/profile.d/`) lists these URLs with the live pod count on each interactive SSH login. On an existing node: `sudo curl -fsSL https://raw.githubusercontent.com/equinix-svc/svc-helm-daihub/main/scripts/motd.sh -o /etc/profile.d/dai-hub-motd.sh`.
 
-## 5. Chat page
+## 6. Chat page
 
 [`src/chat-ui/`](src/chat-ui/) is a light chat console to test the gateway end to end: one static HTML page served by nginx behind the same Traefik. Day 0 installs it with the stack as its own manifest, `chat-ui.yaml`, and its own container image built by the `images` GitHub workflow on every change under `src/chat-ui/`.
 
@@ -114,7 +189,7 @@ The login banner (`scripts/motd.sh`, installed by Day 0 in `/etc/profile.d/`) li
 
 Anyone who passes the login can use the demo key, within its budget and rate limit. To turn that off, delete Secret `chat-demo-key` and restart `chat-ui`: the page then asks for a key. To change the limits, edit the Job in `chat-ui.yaml`, or change the key in the LiteLLM admin UI. The master key is never exposed by the page.
 
-## 6. How it works
+## 7. How it works
 
 ```
 client -> Traefik :80/:443 -> LiteLLM (ai-litellm:4000)
@@ -139,7 +214,7 @@ client -> Traefik :80/:443 -> LiteLLM (ai-litellm:4000)
 | `ai-secrets` | `POSTGRES_USER` `POSTGRES_PASSWORD` `REDIS_PASSWORD` `CLICKHOUSE_PASSWORD` `LANGFUSE_SALT` `LANGFUSE_ENCRYPTION_KEY` (64 hex) `LANGFUSE_NEXTAUTH_SECRET` `LANGFUSE_PUBLIC_KEY` `LANGFUSE_SECRET_KEY` `LANGFUSE_INIT_USER_EMAIL` `LANGFUSE_INIT_USER_PASSWORD` |
 | `litellm-env` | `LITELLM_MASTER_KEY` `REDIS_PASSWORD` `GROQ_API_KEY` `GEMINI_API_KEY` `LANGFUSE_PUBLIC_KEY` `LANGFUSE_SECRET_KEY` (same values as in `ai-secrets`) |
 
-## 7. First start
+## 8. First start
 
 | Component | What happens |
 |---|---|
@@ -147,7 +222,7 @@ client -> Traefik :80/:443 -> LiteLLM (ai-litellm:4000)
 | rag-service | Installs its packages and downloads the embedding model the same way (smaller). |
 | LiteLLM, Langfuse, databases | Wait for each other through probes and retries. Expect several restarts in the first minutes. |
 
-## 8. Use
+## 9. Use
 
 ```bash
 sudo cat /etc/ai-gateway/credentials.env            # master key, Langfuse login (when installed by Day 0)
@@ -159,15 +234,16 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
   "import httpx;print(httpx.post('http://localhost:8000/ingest',json={},timeout=600).json())"
 ```
 
-## 9. What was tested
+## 10. What was tested
 
 - The public name path: `fqdn.sh` writes valid manifests (accepted by the cluster API in a server-side dry run); the Traefik chart renders the Let's Encrypt resolver, the certificate volume and the permissions init container; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
 - The Qdrant (1.20.0), Langfuse (2.2.3) and LiteLLM (1.108.0) charts render with `helm template` using the values in this file, and every image they use exists (`scripts/validate.sh`).
 - A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
 - The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
 - Both Day 0 templates (about 18.5 KB each) render and pass a shell syntax check.
+- Two nodes on a Fabric Network: the private path, the API and kubelet on the private address, and the shared API address with certificate verification through it. Three nodes and the failover of the address are not tested.
 
-## 10. Findings and limits
+## 11. Findings and limits
 
 - **Public name:** the DNS wait was tested with stand-ins for DNS and the node's addresses. Let's Encrypt issued the certificates on a real node. Traefik requests a certificate about a second after it starts, so its Deployment uses the `Recreate` strategy and its Service publishes not-ready addresses (the validation can otherwise reach the old pod or no pod). The wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver; a negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
@@ -178,6 +254,6 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 - **Not provided:** TLS certificate beyond Traefik's default, volume backups, and authentication in front of LiteLLM's `/ui` other than its own login.
 - **Internet:** the node needs outbound internet at first boot (GitHub, container registries, PyPI, Hugging Face).
 
-## 11. Build and validate
+## 12. Build and validate
 
 Edit `ai-gateway.yaml.in` and the files under `src/`, then run `scripts/validate.sh`. It builds `ai-gateway.yaml` and renders every chart with `helm template` in Docker. Commit both the sources and the generated file.
