@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="DAI Hub" width="120">
 
-AI gateway stack for a k3s node or a three-node k3s cluster (section 4), as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images and no registry to maintain. It has been deployed on two Network Edge devices; section 10 lists what was tested. The three-node cluster is not tested yet.
+AI gateway stack for a k3s node or a three-node k3s cluster (section 4), as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images and no registry to maintain. It has been deployed on two Network Edge devices; section 10 lists what was tested. The shared name (section 4) is tested on a two-node cluster; a third node is not tested yet.
 
 ## 1. Stack
 
@@ -135,7 +135,7 @@ With `K3S_ROLE=server` the first node sets up one name for the whole cluster, se
 
 Port 80 must be reachable from the internet: Let's Encrypt fetches the challenge from whichever node it reaches, and every node forwards it to the same cert-manager pod. The certificate is requested once `<FQDN>` and `langfuse.<FQDN>` resolve to the node (`dai-dns-wait`), so create the records after the node has its public address. No key or Secret needs loading.
 
-Check: `sudo k3s kubectl -n ai-gateway get certificate dai-tls` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate. A rebuilt node only needs its A record updated. Another name (for example a per-node name) can be added later with the annotation `cert-manager.io/cluster-issuer: letsencrypt-http` on its Ingress and a `tls.secretName`.
+Check: `sudo k3s kubectl -n ai-gateway get certificate dai-tls` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate. A rebuilt node only needs its A record updated. A cluster that already ran with Traefik's own Let's Encrypt resolver must drop it first: that resolver answers every `/.well-known/acme-challenge/` request itself (404 for cert-manager's tokens). Remove it from the Traefik config (`traefik-config.yaml` above has none), then give each existing name its own `Certificate` and `tls.secretName` before switching. Another name (for example a per-node name) can be added later with the annotation `cert-manager.io/cluster-issuer: letsencrypt-http` on its Ingress and a `tls.secretName`.
 
 ### Check
 
@@ -255,7 +255,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 - A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
 - The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
 - Both Day 0 templates (about 18.5 KB each) render and pass a shell syntax check.
-- The shared-name mode (`K3S_ROLE=server`): `scripts/fqdn.sh` writes manifests that a real API server accepts (with the cert-manager CRDs), the cert-manager and Traefik charts render, and Traefik becomes a DaemonSet without the ACME resolver or its volume. A `single` node gets exactly the files it got before. Not tested: a certificate issued through cert-manager, and Traefik on every node of a live cluster.
+- The shared-name mode (`K3S_ROLE=server`): `scripts/fqdn.sh` writes manifests that a real API server accepts (with the cert-manager CRDs), the cert-manager and Traefik charts render, and Traefik becomes a DaemonSet without the ACME resolver or its volume. A `single` node gets exactly the files it got before. Tested live on two nodes: cert-manager issued the certificate for the shared name (staging, then production), Traefik runs on both nodes, and every name answered with a valid certificate on each node's address.
 - Two nodes on a Fabric Network: the private path, the API and kubelet on the private address, and the shared API address with certificate verification through it. Three nodes and the failover of the address are not tested.
 
 ## 11. Findings and limits
