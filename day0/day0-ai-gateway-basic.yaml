@@ -8,7 +8,7 @@
 #   Custom parameters : GROQ_API_KEY GEMINI_API_KEY   (both optional; at least one is needed for the models to answer)
 #                       REGISTRY_USER REGISTRY_TOKEN   (REQUIRED: GitHub login and read:packages token to pull the private chat page image from ghcr.io)
 #                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
-#   Fixed             : K3S_ROLE=single; private path on ens4 (10.250.<3rd>.<4th>/16 from the public IP); LiteLLM master key and Langfuse login are generated
+#   Fixed             : K3S_ROLE=single; private path on ens4 (10.250.<3rd>.<4th>/16 from the public IP) and API address 10.250.0.10; LiteLLM master key and Langfuse login are generated
 # AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
 # it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
 # (default branch) into the
@@ -68,6 +68,7 @@ write_files:
       K3S_TLS_SAN=''
       K3S_PRIVATE_IFACE=''
       K3S_PRIVATE_IP_CIDR=''
+      K3S_API_VIP=''
       GROQ_API_KEY='[(${GROQ_API_KEY})]'
       GEMINI_API_KEY='[(${GEMINI_API_KEY})]'
       LITELLM_MASTER_KEY=''
@@ -243,6 +244,16 @@ write_files:
         echo "private path: $PRIV_CIDR on $PRIV_IF"
       fi
 
+      # Shared API address (kube-vip, see scripts/api-vip.sh): it goes into the API certificate, so it is known before k3s starts
+      API_VIP_EFF=""
+      if [ -n "$PRIV_IP" ] && [ "$K3S_API_VIP" != none ]; then API_VIP_EFF="${K3S_API_VIP:-10.250.0.10}"; fi
+      SANS="$K3S_TLS_SAN $API_VIP_EFF"
+      write_sans() {
+        [ -n "${SANS// /}" ] || return 0
+        echo "tls-san:" >> "$CFG"
+        for san in $SANS; do printf '  - "%s"\n' "$san" >> "$CFG"; done
+      }
+
       mkdir -p /etc/rancher/k3s
       CFG=/etc/rancher/k3s/config.yaml
       : > "$CFG"; chmod 0600 "$CFG"
@@ -258,12 +269,12 @@ write_files:
         single)
           echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
           [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
-          [ -n "$K3S_TLS_SAN" ] && printf 'tls-san:\n  - "%s"\n' "$K3S_TLS_SAN" >> "$CFG"
+          write_sans
           UNIT=k3s ;;
         server)
           echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
           [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
-          [ -n "$K3S_TLS_SAN" ] && printf 'tls-san:\n  - "%s"\n' "$K3S_TLS_SAN" >> "$CFG"
+          write_sans
           if [ -n "$K3S_SERVER_URL" ]; then echo "server: \"$K3S_SERVER_URL\"" >> "$CFG"; else echo "cluster-init: true" >> "$CFG"; fi
           UNIT=k3s ;;
         agent)
@@ -315,6 +326,13 @@ write_files:
           printf 'export KUBECONFIG=$HOME/.kube/config\n' > /etc/profile.d/k3s-kubeconfig.sh
         else
           echo "no /etc/rancher/k3s/k3s.yaml yet: kubeconfig for $USER_NAME not installed"
+        fi
+        # Stable API address on the private network: kube-vip plus one forwarding rule (script from this repo, not fatal)
+        if [ -n "$API_VIP_EFF" ]; then
+          curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/api-vip.sh" -o /usr/local/bin/day0-api-vip.sh \
+            && VIP="$API_VIP_EFF" PRIV_IF="$PRIV_IF" NODE_IP="$PRIV_IP" bash /usr/local/bin/day0-api-vip.sh \
+            || echo "API address setup failed (non-fatal): see this log"
         fi
       fi
 
