@@ -146,6 +146,8 @@ write_files:
       }
       fetch ai-gateway.yaml ai-gateway.yaml
       fetch chat-ui.yaml chat-ui.yaml
+      # Replicated volumes (Longhorn): cluster only, not fatal
+      [ "${K3S_ROLE:-}" != server ] || ( fetch longhorn.yaml longhorn.yaml ) || echo "longhorn.yaml not installed (non-fatal)"
       # Login banner (best effort: never stops the install)
       curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
         "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/motd.sh" -o /etc/profile.d/dai-hub-motd.sh \

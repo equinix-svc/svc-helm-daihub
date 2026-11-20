@@ -1,0 +1,22 @@
+# Replicated volumes for a cluster (K3S_ROLE=server): Longhorn keeps each volume on two nodes, so a pod can restart on the
+# other node with its data. Installed by Day 0 on the first server only. It needs open-iscsi on every node (Day 0 installs it).
+# StorageClass "longhorn" is not the default: the stack keeps using local-path until its volumes are moved on purpose.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata: { name: longhorn, namespace: kube-system }
+spec:
+  repo: https://charts.longhorn.io
+  chart: longhorn
+  version: 1.12.2
+  targetNamespace: longhorn-system
+  createNamespace: true
+  valuesContent: |-
+    persistence:
+      defaultClass: false
+      defaultClassReplicaCount: 2
+    defaultSettings:
+      defaultDataPath: /var/lib/longhorn
+      defaultReplicaCount: 2
+      storageMinimalAvailablePercentage: 15
+      # a pod on a failed node is deleted so that it restarts on a live node with the other copy of its volume
+      nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod

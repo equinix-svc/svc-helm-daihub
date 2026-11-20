@@ -35,7 +35,7 @@ ACL: allow 22 and 80/443. First start takes about 10 minutes (see First start).
 Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qcow2` (portal settings in `docs/portal-values.md` of svc-ne-byoi-builder). They do what that image's own Day 0 does (hostname, static network, portal user, k3s), then on a `single` node or the first `server`, once k3s is Ready:
 
 1. generate the two Secrets (see 6. How it works) with random values, except the keys you pass in, and write the ones you need to `/etc/ai-gateway/credentials.env` (root only);
-2. download `ai-gateway.yaml` and the chat page manifest (`chat-ui.yaml`) from this repo into `/var/lib/rancher/k3s/server/manifests/`, where k3s deploys them.
+2. download `ai-gateway.yaml` and the chat page manifest (`chat-ui.yaml`) from this repo (and, on a cluster, `longhorn.yaml`) into `/var/lib/rancher/k3s/server/manifests/`, where k3s deploys them.
 
 | Template | Use | Portal parameters |
 |---|---|---|
@@ -139,6 +139,17 @@ Port 80 must be reachable from the internet: Let's Encrypt fetches the challenge
 
 Check: `sudo k3s kubectl -n ai-gateway get certificate dai-tls` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate. A rebuilt node only needs its A record updated. A cluster that already ran with Traefik's own Let's Encrypt resolver must drop it first: that resolver answers every `/.well-known/acme-challenge/` request itself (404 for cert-manager's tokens). Remove it from the Traefik config (`traefik-config.yaml` above has none), then give each existing name its own `Certificate` and `tls.secretName` before switching. Another name (for example a per-node name) can be added later with the annotation `cert-manager.io/cluster-issuer: letsencrypt-http` on its Ingress and a `tls.secretName`.
 
+### Replicated volumes
+
+With `K3S_ROLE=server` the first node also installs [`longhorn.yaml`](longhorn.yaml) (Longhorn 1.12.2). Longhorn keeps each volume on two nodes, so a pod can restart on the other node with its data.
+
+| Item | Value |
+|---|---|
+| StorageClass | `longhorn`, 2 replicas, not the default |
+| Needs | `open-iscsi` on every node: the ADVANCED Day 0 installs it |
+| Node failure | a pod on a failed node is deleted and restarts on a live node |
+| Stack volumes | still on `local-path`: nothing uses `longhorn` until a volume is moved to it |
+
 ### Check
 
 - `kubectl get nodes`: three nodes `Ready`, roles `control-plane,etcd`.
@@ -159,7 +170,7 @@ A two-node cluster has no spare: any failure is the last row.
 ### Not covered yet
 
 - **Web entry:** on a `single` node Traefik runs as one pod, so the web interfaces depend on that node. A `server` node sets up the shared name above.
-- **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk.
+- **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk. Longhorn is installed, but their volumes are not moved to it yet.
 
 ## 5. Web interfaces
 
