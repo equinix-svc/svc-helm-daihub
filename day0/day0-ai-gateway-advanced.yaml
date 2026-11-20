@@ -285,6 +285,16 @@ write_files:
         *) echo "unknown K3S_ROLE: $ROLE"; exit 1 ;;
       esac
 
+      # iSCSI initiator for replicated volumes (Longhorn): every cluster node needs it. Cluster roles only; not fatal, k3s and the
+      # local-path volumes work without it. The image has no apt lists, so update first.
+      if [ "$ROLE" != single ]; then
+        if command -v iscsiadm >/dev/null 2>&1; then echo "open-iscsi already installed"
+        elif apt-get update -qq >/var/log/open-iscsi-install.log 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq open-iscsi >>/var/log/open-iscsi-install.log 2>&1; then
+          mkdir -p /etc/modules-load.d; echo iscsi_tcp > /etc/modules-load.d/iscsi.conf; systemctl restart systemd-modules-load || modprobe iscsi_tcp || true; systemctl enable --now iscsid || true
+          echo "open-iscsi installed"
+        else echo "open-iscsi NOT installed (see /var/log/open-iscsi-install.log): replicated volumes need it"; fi
+      fi
+
       # Private container images on ghcr.io (e.g. the chat page): pull credentials for containerd (k3s reads this file at start)
       if [ -n "$REGISTRY_TOKEN" ]; then
         install -d -m 0755 /etc/rancher/k3s

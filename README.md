@@ -25,7 +25,7 @@ Only LiteLLM is exposed, on 80/443 through Traefik. Everything else stays inside
 |---|---|
 | 1. VM image | Plain `k3s-node` image (`k3s-node.qcow2`) from [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder). Portal settings: `docs/portal-values.md` in that repo. |
 | 2. Container images | The stack uses public images. The chat page image `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui:0.1.0` is private: the node pulls it with `REGISTRY_USER` and `REGISTRY_TOKEN` (required). |
-| 3. Day 0 file | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) for a single node with two parameters, [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) to join a cluster or set credentials. |
+| 3. Day 0 file | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) for a single node only, [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) for a cluster (and for a single node with chosen credentials). |
 | 4. Parameters | BASIC: `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL` and `FQDN` (required); `GROQ_API_KEY` and `GEMINI_API_KEY` (set them for the models to answer); `ADMIN_PASSWORD` (optional). Create the DNS records for `FQDN` once the node has its IP. Full list: [Day 0 templates](#3-day-0-templates). |
 
 ACL: allow 22 and 80/443. First start takes about 10 minutes (see First start).
@@ -39,14 +39,14 @@ Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qc
 
 | Template | Use | Portal parameters |
 |---|---|---|
-| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node, everything else fixed or generated | 7, 4 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster join, chosen credentials, pinned repo version | 14, 4 required |
+| [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node only (no cluster, no private network), everything else fixed or generated | 7, 4 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: two or three node cluster (private network, shared API address), chosen credentials, pinned repo version | 14, 4 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
 ### Parameters
 
-The **BASIC** and **ADVANCED** columns show whether the parameter is required in that template: `yes`, `no`, or `-` (not used). **Default** is what the template uses when a parameter that is not required is left empty. BASIC fixes the unused ones to their default.
+The **BASIC** and **ADVANCED** columns show whether the parameter is required in that template: `yes`, `no`, or `-` (not used). **Default** is what the template uses when a parameter that is not required is left empty. BASIC has no cluster settings: it installs one node.
 
 | Parameter | BASIC | ADVANCED | Default | Example (paste in the portal) | Meaning |
 |---|---|---|---|---|---|
@@ -61,18 +61,20 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `K3S_SERVER_URL` | - | no | empty | `https://10.250.0.10:6443` | Agent or joining server. The shared API address (`K3S_API_VIP`, port 6443): it keeps working whichever server is up. A server's own private address also works, but then that server must be up when the node starts. Empty for `single` or the first `server`. |
 | `K3S_TOKEN` | - | no | empty | `K10abc123def456::server:789xyz` | Secret of the k3s cluster. Set the same value on the first `server` (it fixes the secret, so you know it before that node exists) and on every agent or joining server. Empty: k3s generates one. |
 | `K3S_TLS_SAN` | - | no | empty | `203.0.113.20` | Extra name or IP in the k3s API server certificate, for `kubectl` or agents reaching port 6443 from outside. Not needed for local `sudo k3s kubectl`. |
-| `K3S_PRIVATE_IFACE` | fixed `ens4` | no | `ens4` | `ens4` | Interface used for the private path between nodes. Skipped when it does not exist. |
-| `K3S_PRIVATE_IP_CIDR` | fixed (derived) | no | `10.250.<3rd>.<4th>/16` from the node's public IP | `10.250.0.11/24` | Static private address on the private interface. By default derived from the public IP (public `87.237.190.93` gives `10.250.190.93/16`), so nodes do not collide. `none` turns the private path off. |
-| `K3S_API_VIP` | fixed `10.250.0.10` | no | `10.250.0.10` | `10.250.0.10` | Address shared by the control-plane nodes on the private network, held by one of them at a time (kube-vip). Used as `K3S_SERVER_URL` by joining nodes. Only with the private path on; `none` turns it off. Must be unused on the `ens4` network. |
+| `K3S_PRIVATE_IFACE` | - | no | `ens4` | `ens4` | Interface used for the private path between nodes. Skipped when it does not exist. |
+| `K3S_PRIVATE_IP_CIDR` | - | no | `10.250.<3rd>.<4th>/16` from the node's public IP | `10.250.0.11/24` | Static private address on the private interface. By default derived from the public IP (public `87.237.190.93` gives `10.250.190.93/16`), so nodes do not collide. `none` turns the private path off. |
+| `K3S_API_VIP` | - | no | `10.250.0.10` | `10.250.0.10` | Address shared by the control-plane nodes on the private network, held by one of them at a time (kube-vip). Used as `K3S_SERVER_URL` by joining nodes. Only with the private path on; `none` turns it off. Must be unused on the `ens4` network. |
 | `ADMIN_PASSWORD` | no | no | generated | `ChangeMe-2026` | Password of the shared admin account. |
 
 ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
-Private path: by default each node also configures `ens4` with a private address in `10.250.0.0/16`, used as the k3s `node-ip` and `flannel-iface`. The cluster mode built on it is described in [section 4](#4-three-node-cluster).
+Private path (ADVANCED only): by default each node also configures `ens4` with a private address in `10.250.0.0/16`, used as the k3s `node-ip` and `flannel-iface`. The cluster mode built on it is described in [section 4](#4-three-node-cluster).
 
 ## 4. Three-node cluster
 
 Three control-plane nodes (`K3S_ROLE=server`, embedded etcd) on one private Layer 2 network. The API and the cluster keep working when one node is lost, because two of three etcd members are still a majority.
+
+Use the [ADVANCED Day 0 template](day0/day0-ai-gateway-advanced.yaml) on every node of the cluster. The BASIC template installs one standalone node only.
 
 ```mermaid
 flowchart LR
@@ -121,7 +123,7 @@ flowchart LR
 | 1 | `server` | empty: it starts the cluster and installs the stack | a secret you choose | `REGISTRY_USER`, `REGISTRY_TOKEN`, `ADMIN_EMAIL`, `FQDN`, the API keys |
 | 2 and 3 | `server` | `https://10.250.0.10:6443` | the same value as node 1 | none |
 
-Create node 1 first and wait until it is Ready and the API address answers, then create the others. A node that starts before its `ens4` link is up keeps retrying for up to 30 minutes.
+Create node 1 first and wait until it is Ready and the API address answers, then create the others. A node that starts before its `ens4` link is up keeps retrying for up to 30 minutes. With the ADVANCED template, Day 0 on `server` and `agent` nodes also installs `open-iscsi` (apt, from the Debian mirror) and loads `iscsi_tcp`, which replicated volumes need; if the install fails, Day 0 goes on and logs it in `/var/log/open-iscsi-install.log`.
 
 ### Shared name and certificates
 

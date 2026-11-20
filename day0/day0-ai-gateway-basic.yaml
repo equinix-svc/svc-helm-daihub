@@ -1,15 +1,15 @@
 #cloud-config
 # BASIC Day 0 template for the Equinix Network Edge custom VNF profile "k3s-node" (image from equinix-svc/svc-ne-byoi-builder),
-# extended to install the AI gateway stack of this repo on a single node. Few portal parameters; everything else
-# is fixed or generated. See day0-ai-gateway-advanced.yaml for the full parameter set (cluster join, credentials, repo ref).
+# extended to install the AI gateway stack of this repo on a SINGLE node. Few portal parameters; everything else
+# is fixed or generated. For a cluster (two or three nodes, private network, shared API address) use day0-ai-gateway-advanced.yaml.
 #
 # Placeholders use the Equinix inline syntax (case-sensitive names), see docs/portal-values.md in svc-ne-byoi-builder.
 #   Equinix predefined: hostname userName publicKey adminPwd ipAddressWithCidr gateway
 #   Custom parameters : GROQ_API_KEY GEMINI_API_KEY   (both optional; at least one is needed for the models to answer)
 #                       REGISTRY_USER REGISTRY_TOKEN   (REQUIRED: GitHub login and read:packages token to pull the private chat page image from ghcr.io)
 #                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD   (the shared login for chat, LiteLLM UI and Langfuse; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
-#   Fixed             : K3S_ROLE=single; private path on ens4 (10.250.<3rd>.<4th>/16 from the public IP) and API address 10.250.0.10; LiteLLM master key and Langfuse login are generated
-# AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
+#   Fixed             : one node, no cluster; LiteLLM master key and Langfuse login are generated
+# AI gateway variant. Uses the plain k3s-node image: once k3s is Ready,
 # it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
 # (default branch) into the
 # k3s manifests directory, and k3s's Helm controller deploys LiteLLM, Langfuse, Presidio, LLM Guard, Qdrant and
@@ -17,10 +17,6 @@
 #
 # Equinix injects a STATIC address (no DHCP), so this file configures the network itself.
 #
-# Roles (K3S_ROLE): single | server | agent
-#   single : standalone node (server with embedded datastore)
-#   server : control-plane node; joins K3S_SERVER_URL if provided, otherwise initialises a new cluster
-#   agent  : worker; requires K3S_SERVER_URL and K3S_TOKEN
 
 hostname: [(${hostname})]
 manage_etc_hosts: true
@@ -62,13 +58,6 @@ write_files:
       PUBLIC_KEY='[(${publicKey})]'
       ADMIN_PWD='[(${adminPwd})]'
       ADMIN_PASSWORD='[(${adminPassword})]'
-      K3S_ROLE='single'
-      K3S_SERVER_URL=''
-      K3S_TOKEN=''
-      K3S_TLS_SAN=''
-      K3S_PRIVATE_IFACE=''
-      K3S_PRIVATE_IP_CIDR=''
-      K3S_API_VIP=''
       GROQ_API_KEY='[(${GROQ_API_KEY})]'
       GEMINI_API_KEY='[(${GEMINI_API_KEY})]'
       LITELLM_MASTER_KEY=''
@@ -224,65 +213,14 @@ write_files:
       echo "$DIAG" >> /etc/issue
       echo "$DIAG" > /dev/console || true
 
-      ROLE="$K3S_ROLE"; [ -n "$ROLE" ] || ROLE=single
+      ROLE=single; UNIT=k3s
       NODE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
-
-      # Private path between nodes (default on): static address on a second interface, default ens4, in 10.250.0.0/16.
-      # The address is built from the public IP (10.250.<3rd>.<4th>/16) so nodes never collide; K3S_PRIVATE_IP_CIDR
-      # overrides it and "none" turns the private path off. k3s then uses it as node-ip and flannel interface, so cluster traffic
-      # (flannel, etcd, API for joining nodes) stays on it. Skipped when the interface does not exist.
-      PRIV_IF="${K3S_PRIVATE_IFACE:-ens4}"; PRIV_IP=""
-      PRIV_CIDR="$K3S_PRIVATE_IP_CIDR"
-      if [ -z "$PRIV_CIDR" ] && [ -n "$NODE_IP" ]; then PRIV_CIDR="10.250.$(echo "$NODE_IP" | cut -d. -f3).$(echo "$NODE_IP" | cut -d. -f4)/16"; fi
-      [ "$PRIV_CIDR" != none ] || PRIV_CIDR=""
-      if [ -n "$PRIV_CIDR" ] && ! ip link show "$PRIV_IF" >/dev/null 2>&1; then echo "private path skipped: no interface $PRIV_IF"; PRIV_CIDR=""; fi
-      if [ -n "$PRIV_CIDR" ]; then
-        PRIV_IP="${PRIV_CIDR%/*}"
-        printf '[Match]\nName=%s\n\n[Network]\nAddress=%s\nConfigureWithoutCarrier=yes\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' \
-          "$PRIV_IF" "$PRIV_CIDR" > /etc/systemd/network/10-private.network
-        networkctl reload; networkctl reconfigure "$PRIV_IF" || true
-        echo "private path: $PRIV_CIDR on $PRIV_IF"
-      fi
-
-      # Shared API address (kube-vip, see scripts/api-vip.sh): it goes into the API certificate, so it is known before k3s starts
-      API_VIP_EFF=""
-      if [ -n "$PRIV_IP" ] && [ "$K3S_API_VIP" != none ]; then API_VIP_EFF="${K3S_API_VIP:-10.250.0.10}"; fi
-      SANS="$K3S_TLS_SAN $API_VIP_EFF"
-      write_sans() {
-        [ -n "${SANS// /}" ] || return 0
-        echo "tls-san:" >> "$CFG"
-        for san in $SANS; do printf '  - "%s"\n' "$san" >> "$CFG"; done
-      }
 
       mkdir -p /etc/rancher/k3s
       CFG=/etc/rancher/k3s/config.yaml
       : > "$CFG"; chmod 0600 "$CFG"
-      [ -n "${PRIV_IP:-$NODE_IP}" ] && echo "node-ip: ${PRIV_IP:-$NODE_IP}" >> "$CFG"
-      # flannel does not follow node-ip: without this it keeps the VXLAN on the public interface
-      [ -z "$PRIV_IP" ] || echo "flannel-iface: $PRIV_IF" >> "$CFG"
-      # Cluster services on the private address only: the kubelet (10250) here, the API (6443) on servers below.
-      # k3s keeps its own loopback listener, so kubectl on the node still works.
-      [ -z "$PRIV_IP" ] || printf 'kubelet-arg:\n  - "address=%s"\n' "$PRIV_IP" >> "$CFG"
-      [ -n "$K3S_TOKEN" ] && echo "token: \"$K3S_TOKEN\"" >> "$CFG"
-
-      case "$ROLE" in
-        single)
-          echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
-          [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
-          write_sans
-          UNIT=k3s ;;
-        server)
-          echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
-          [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
-          write_sans
-          if [ -n "$K3S_SERVER_URL" ]; then echo "server: \"$K3S_SERVER_URL\"" >> "$CFG"; else echo "cluster-init: true" >> "$CFG"; fi
-          UNIT=k3s ;;
-        agent)
-          [ -n "$K3S_SERVER_URL" ] && [ -n "$K3S_TOKEN" ] || { echo "agent needs K3S_SERVER_URL and K3S_TOKEN"; exit 1; }
-          echo "server: \"$K3S_SERVER_URL\"" >> "$CFG"
-          UNIT=k3s-agent ;;
-        *) echo "unknown K3S_ROLE: $ROLE"; exit 1 ;;
-      esac
+      [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP" >> "$CFG"
+      echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
 
       # Private container images on ghcr.io (e.g. the chat page): pull credentials for containerd (k3s reads this file at start)
       if [ -n "$REGISTRY_TOKEN" ]; then
@@ -298,17 +236,14 @@ write_files:
         echo "registry credentials for ghcr.io written"
       fi
 
-      # A joining node can start before its server is reachable (for example the private link is not up yet). systemd
-      # keeps retrying the unit (Restart=always), so a failed first start must not abort Day 0.
+      # systemd keeps retrying the unit (Restart=always), so a failed first start must not abort Day 0.
       systemctl daemon-reload
       systemctl enable "$UNIT"
-      systemctl start "$UNIT" || echo "first start of $UNIT failed (the server may not be reachable yet); systemd keeps retrying"
+      systemctl start "$UNIT" || echo "first start of $UNIT failed; systemd keeps retrying"
 
       if [ "$UNIT" = k3s ]; then
-        # a joining server may wait for its private link: up to 30 minutes instead of 5
-        WAIT_N=60; [ -z "$K3S_SERVER_URL" ] || WAIT_N=360
         K3S_READY=no
-        for i in $(seq 1 "$WAIT_N"); do
+        for i in $(seq 1 60); do
           if /usr/local/bin/k3s kubectl get nodes 2>/dev/null | grep -qw Ready; then K3S_READY=yes; break; fi
           sleep 5
         done
@@ -327,20 +262,12 @@ write_files:
         else
           echo "no /etc/rancher/k3s/k3s.yaml yet: kubeconfig for $USER_NAME not installed"
         fi
-        # Stable API address on the private network: kube-vip plus one forwarding rule (script from this repo, not fatal)
-        if [ -n "$API_VIP_EFF" ]; then
-          curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
-            "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/api-vip.sh" -o /usr/local/bin/day0-api-vip.sh \
-            && VIP="$API_VIP_EFF" PRIV_IF="$PRIV_IF" NODE_IP="$PRIV_IP" bash /usr/local/bin/day0-api-vip.sh \
-            || echo "API address setup failed (non-fatal): see this log"
-        fi
       fi
 
-      # AI gateway stack: single node or first server only (agents and joining servers do not deploy it)
-      if [ "$UNIT" = k3s ] && [ -z "$K3S_SERVER_URL" ]; then
+      # AI gateway stack
+      if [ "$UNIT" = k3s ]; then
         echo "installing the AI gateway stack"
         GROQ_API_KEY="$GROQ_API_KEY" GEMINI_API_KEY="$GEMINI_API_KEY" LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-                \
         ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" FQDN="$FQDN" \
         REGISTRY_USER="$REGISTRY_USER" REGISTRY_TOKEN="$REGISTRY_TOKEN" /usr/local/bin/day0-ai-stack.sh \
           || echo "AI gateway install failed: see this log"
