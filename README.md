@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="DAI Hub" width="120">
 
-AI gateway stack for a k3s node or a three-node k3s cluster (section 4), as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images and no registry to maintain. It has been deployed on two Network Edge devices; section 10 lists what was tested. The shared name (section 4) is tested on a two-node cluster; a third node is not tested yet.
+AI gateway stack for a single k3s node or a two or three node k3s cluster (section 4), as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik and the local-path StorageClass. There are no custom container images apart from the chat page, and no registry to maintain. It has been deployed on two Network Edge devices, as a single node and as a two-node cluster; a third node is not tested yet. Section 10 lists what was tested.
 
 ## 1. Stack
 
@@ -71,9 +71,9 @@ ACL: allow 22 and 80/443. Langfuse, Qdrant and S3 are not exposed.
 
 Private path (ADVANCED only): by default each node also configures `ens4` with a private address in `10.250.0.0/16`, used as the k3s `node-ip` and `flannel-iface`. The cluster mode built on it is described in [section 4](#4-three-node-cluster).
 
-## 4. Three-node cluster
+## 4. Cluster (two or three nodes)
 
-Three control-plane nodes (`K3S_ROLE=server`, embedded etcd) on one private Layer 2 network. The API and the cluster keep working when one node is lost, because two of three etcd members are still a majority.
+Two or three control-plane nodes (`K3S_ROLE=server`, embedded etcd) on one private Layer 2 network. With three, the API and the cluster keep working when one node is lost, because two of three etcd members are still a majority.
 
 Use the [ADVANCED Day 0 template](day0/day0-ai-gateway-advanced.yaml) on every node of the cluster. The BASIC template installs one standalone node only.
 
@@ -91,18 +91,6 @@ flowchart LR
   N2 <-- "etcd, flannel" --> N3
   N1 <-- "etcd, flannel" --> N3
 ```
-
-### What listens where
-
-| What | How | Listens on |
-|---|---|---|
-| Cluster traffic (flannel, etcd, kubelet to API) | `node-ip` and `flannel-iface` set to the `ens4` address | `ens4` |
-| API (6443) | `bind-address` on servers | the node's private address and loopback |
-| Kubelet (10250) | `kubelet-arg address=` | the private address |
-| etcd (2379, 2380) | follows `node-ip` | the private address and loopback |
-| Shared API address | [`scripts/api-vip.sh`](scripts/api-vip.sh), downloaded by Day 0 once k3s is Ready: kube-vip (static pod, ARP) holds `K3S_API_VIP` on `ens4`, and `k3s-api-vip.service` forwards it to the node's own API. The address is in the API certificate (`tls-san`) | `10.250.0.10` on one node at a time |
-| flannel VXLAN (UDP 8472) | cannot be restricted in the k3s config | every interface: keep it closed in the Equinix ACL |
-| Web (80, 443) | ServiceLB | each node's public address |
 
 ### Network
 
@@ -126,7 +114,19 @@ flowchart LR
 
 Create node 1 first and wait until it is Ready and the API address answers, then create the others. A node that starts before its `ens4` link is up keeps retrying for up to 30 minutes. With the ADVANCED template, Day 0 on `server` and `agent` nodes also installs `open-iscsi` (apt, from the Debian mirror) and loads `iscsi_tcp`, which replicated volumes need; if the install fails, Day 0 goes on and logs it in `/var/log/open-iscsi-install.log`.
 
-### Shared name and certificates
+### What listens where
+
+| What | How | Listens on |
+|---|---|---|
+| Cluster traffic (flannel, etcd, kubelet to API) | `node-ip` and `flannel-iface` set to the `ens4` address | `ens4` |
+| API (6443) | `bind-address` on servers | the node's private address and loopback |
+| Kubelet (10250) | `kubelet-arg address=` | the private address |
+| etcd (2379, 2380) | follows `node-ip` | the private address and loopback |
+| Shared API address | [`scripts/api-vip.sh`](scripts/api-vip.sh), downloaded by Day 0 once k3s is Ready: kube-vip (static pod, ARP) holds `K3S_API_VIP` on `ens4`, and `k3s-api-vip.service` forwards it to the node's own API. The address is in the API certificate (`tls-san`) | `10.250.0.10` on one node at a time |
+| flannel VXLAN (UDP 8472) | cannot be restricted in the k3s config | every interface: keep it closed in the Equinix ACL |
+| Web (80, 443) | ServiceLB | each node's public address |
+
+### Web entry: names and certificates
 
 With `K3S_ROLE=server` the first node sets up one name for the whole cluster, served by every node, with one certificate. Set `FQDN` to the shared name, for example `svc-dai.eu.solutionvalidation.center`. A `single` node uses the same pieces (cert-manager and Traefik), with one pod each. `NODE_FQDNS` (optional, comma separated, for example `svc-dai-par01.example.net,svc-dai-par02.example.net`) adds one certificate and one set of Ingresses per node name, so each node's own name is valid too.
 
@@ -135,6 +135,15 @@ With `K3S_ROLE=server` the first node sets up one name for the whole cluster, se
 | cert-manager | asks Let's Encrypt (HTTP-01) for one certificate covering `<FQDN>` and `langfuse.<FQDN>`, and keeps it in Secret `dai-tls` |
 | Traefik | runs on every node (a DaemonSet) and reads `dai-tls` from the Ingresses, so any node can serve the name |
 | DNS | one A record per node's public address, for `<FQDN>` and `langfuse.<FQDN>`; you create them |
+
+What each name gets:
+
+| Name | Certificate (Secret) | Ingresses |
+|---|---|---|
+| `<FQDN>` | `dai-tls` | `fqdn-litellm` (`/`), `fqdn-chat` (`/chat`) |
+| `langfuse.<FQDN>` | `dai-tls` | `fqdn-langfuse` |
+| node name *N* from `NODE_FQDNS`, and `langfuse.<name>` | `dai-node`*N*`-tls` | `node`*N*`-litellm`, `node`*N*`-chat`, `node`*N*`-langfuse` |
+| any other name pointing at a node | none: Traefik's default certificate | none |
 
 Port 80 must be reachable from the internet: Let's Encrypt fetches the challenge from whichever node it reaches, and every node forwards it to the same cert-manager pod. The certificate is requested once `<FQDN>` and `langfuse.<FQDN>` resolve to the node (`dai-dns-wait`), so create the records after the node has its public address. No key or Secret needs loading.
 
@@ -151,13 +160,6 @@ With `K3S_ROLE=server` the first node also installs [`longhorn.yaml`](longhorn.y
 | Node failure | a pod on a failed node is deleted and restarts on a live node |
 | Stack volumes | still on `local-path`: nothing uses `longhorn` until a volume is moved to it |
 
-### Check
-
-- `kubectl get nodes`: three nodes `Ready`, roles `control-plane,etcd`.
-- `ip -br a show ens4` on each node: the API address appears on exactly one.
-- `curl -sk https://10.250.0.10:6443/healthz` from a node answers `401` (reachable, login required).
-- From the internet, 6443 and 10250 are closed.
-
 ### When a node fails
 
 | Servers up | etcd majority | API | API address |
@@ -168,10 +170,12 @@ With `K3S_ROLE=server` the first node also installs [`longhorn.yaml`](longhorn.y
 
 A two-node cluster has no spare: any failure is the last row.
 
-### Not covered yet
+### Check
 
-- **Web entry:** on a `single` node the web interfaces depend on that node. A `server` node sets up the shared name above.
-- **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk. Longhorn is installed, but their volumes are not moved to it yet.
+- `kubectl get nodes`: three nodes `Ready`, roles `control-plane,etcd`.
+- `ip -br a show ens4` on each node: the API address appears on exactly one.
+- `curl -sk https://10.250.0.10:6443/healthz` from a node answers `401` (reachable, login required).
+- From the internet, 6443 and 10250 are closed.
 
 ## 5. Web interfaces
 
@@ -264,23 +268,40 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 
 ## 10. What was tested
 
-- The public name path: `fqdn.sh` writes valid manifests (accepted by the cluster API in a server-side dry run); the cert-manager and Traefik charts render; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
+**Build**
+
 - The Qdrant (1.20.0), Langfuse (2.2.3) and LiteLLM (1.108.0) charts render with `helm template` using the values in this file, and every image they use exists (`scripts/validate.sh`).
 - A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
 - The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
-- Both Day 0 templates (about 18.5 KB each) render and pass a shell syntax check.
-- The cert-manager path (`scripts/fqdn.sh`): the manifests are accepted by a real API server (with the cert-manager CRDs), the charts render, and Traefik is a DaemonSet without the ACME resolver. Tested live on two nodes: cert-manager issued the certificates for the shared name (staging, then production), for `svc-dai-par01` and for `svc-dai-par02`; Traefik runs on both nodes, and every name answered with a valid certificate on each node's address. A `single` node now takes the same path, which is not tested on a fresh single node yet.
-- Two nodes on a Fabric Network: the private path, the API and kubelet on the private address, and the shared API address with certificate verification through it. Three nodes and the failover of the address are not tested.
+- Both Day 0 templates render for every role and pass a shell syntax check.
+
+**Single node**
+
+- The stack runs on a real Network Edge device; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
+- The public name now uses cert-manager here too (same manifests as the cluster). That path is not tested on a fresh single node yet.
+
+**Two-node cluster (Fabric Network)**
+
+| Area | Result |
+|---|---|
+| Private path | the API, kubelet and etcd use the private address; the shared API address answers with certificate verification |
+| Names and certificates | cert-manager issued the certificates for the shared name (staging, then production), `svc-dai-par01` and `svc-dai-par02`; Traefik runs on both nodes and every name answered with a valid certificate on each node's address |
+| Traefik as a DaemonSet | switching a live node to it interrupted the web entry for 3 to 10 seconds |
+| Replicated volumes | Longhorn 1.12.2 installed on both nodes; a test volume kept two replicas (one per node) and a pod on the other node read the data back |
+| Not tested | a third node, failover of the API address, and a node loss with Longhorn |
 
 ## 11. Findings and limits
 
-- **Public name:** the DNS wait was tested with stand-ins for DNS and the node's addresses; it compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver. A negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
+- **Two nodes are not a quorum:** with two servers, losing one stops the API, and the shared API address cannot move (kube-vip needs the API to choose a holder). Running pods keep serving. A third node gives a real failover.
+- **Stack data:** the stack volumes use `local-path` on a fresh install. They are single copies on the first node until you move them to the `longhorn` class (section 4).
+- **Web entry:** on a `single` node the web interfaces depend on that node. A cluster serves the same name from every node, but DNS still lists the nodes: a client that tries a failed node waits for a timeout.
+- **Public name:** the DNS wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver. A negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
 - **Fail open:** the LLM Guard and RAG modules let a request through unchanged (logged) if their service is unreachable, so injection blocking applies only while LLM Guard answers. How LiteLLM's native Presidio hooks behave when Presidio is down is untested.
 - **Floating tags:** `presidio-*:latest`, `python:3.12-slim`, and the packages installed at first start (`llm-guard`, `torch`) can change between boots. Pin them once a deployment is validated.
 - **Model names:** the Groq and Gemini names in `src/litellm/config.yaml` come from an earlier lab config and may be stale.
-- **Day 0 size:** the Equinix portal limit is 20,000 characters; the templates are about 18.5 KB, so little room is left: put new logic in a script of this repo, as `scripts/fqdn.sh` and `scripts/api-vip.sh` do.
-- **Not provided:** TLS certificate beyond Traefik's default, volume backups, and authentication in front of LiteLLM's `/ui` other than its own login.
+- **Day 0 size:** the Equinix portal limit is 20,000 characters; BASIC is about 13.9 KB and ADVANCED about 19.8 KB, so ADVANCED has little room left: put new logic in a script of this repo, as `scripts/fqdn.sh`, `scripts/api-vip.sh` and `longhorn.yaml` do.
+- **Not provided:** volume backups, and authentication in front of LiteLLM's `/ui` other than its own login.
 - **Internet:** the node needs outbound internet at first boot (GitHub, container registries, PyPI, Hugging Face).
 
 ## 12. Build and validate
