@@ -158,7 +158,8 @@ With `K3S_ROLE=server` the first node also installs [`longhorn.yaml`](longhorn.y
 | StorageClass | `longhorn`, 2 replicas, not the default |
 | Needs | `open-iscsi` on every node: the ADVANCED Day 0 installs it |
 | Node failure | a pod on a failed node is deleted and restarts on a live node |
-| Stack volumes | still on `local-path`: nothing uses `longhorn` until a volume is moved to it |
+| Stack volumes | `local-path` on a fresh install: move a volume by copying it to a `longhorn` PVC with the same name (stop its workload first) |
+| Over-provisioning | 200%: volumes are thin, and the copies made during a move would otherwise not fit |
 
 ### When a node fails
 
@@ -288,12 +289,13 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 | Names and certificates | cert-manager issued the certificates for the shared name (staging, then production), `svc-dai-par01` and `svc-dai-par02`; Traefik runs on both nodes and every name answered with a valid certificate on each node's address |
 | Traefik as a DaemonSet | switching a live node to it interrupted the web entry for 3 to 10 seconds |
 | Replicated volumes | Longhorn 1.12.2 installed on both nodes; a test volume kept two replicas (one per node) and a pod on the other node read the data back |
+| Stack volumes moved | all seven (Redis, Qdrant, llm-guard, rag-service, SeaweedFS, ClickHouse, Postgres) copied to `longhorn` volumes with two replicas; each service came back and LiteLLM, Langfuse and the three web names answered 200. The move stopped each service for one to ten minutes (ClickHouse, the largest, took longest) |
 | Not tested | a third node, failover of the API address, and a node loss with Longhorn |
 
 ## 11. Findings and limits
 
 - **Two nodes are not a quorum:** with two servers, losing one stops the API, and the shared API address cannot move (kube-vip needs the API to choose a holder). Running pods keep serving. A third node gives a real failover.
-- **Stack data:** the stack volumes use `local-path` on a fresh install. They are single copies on the first node until you move them to the `longhorn` class (section 4).
+- **Stack data:** a fresh install puts the stack volumes on `local-path`, as single copies on the first node, until you move them to the `longhorn` class (section 4). Moving them is a manual step, not part of Day 0.
 - **Web entry:** on a `single` node the web interfaces depend on that node. A cluster serves the same name from every node, but DNS still lists the nodes: a client that tries a failed node waits for a timeout.
 - **Public name:** the DNS wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver. A negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
