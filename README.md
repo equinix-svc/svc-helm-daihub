@@ -15,7 +15,7 @@ AI gateway stack for a single k3s node or a two or three node k3s cluster, as **
 | [7](#7-exposure-and-redundancy) | Internal and external exposure, redundancy |
 | [8](#8-storage-replication) | Storage replication |
 | [9](#9-ai-request-flow) | How a request flows, secrets, first start, use |
-| [10](#10-what-was-tested) [11](#11-findings-and-limits) [12](#12-repository-build-and-validate) | Tested, limits, repository |
+| [10](#10-repository-build-and-validate) | Repository, build and validate |
 
 ## 1. Overall design
 
@@ -391,46 +391,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
   "import httpx;print(httpx.post('http://localhost:8000/ingest',json={},timeout=600).json())"
 ```
 
-## 10. What was tested
-
-**Build**
-
-- The Qdrant (1.20.0), Langfuse (2.2.3) and LiteLLM (1.108.0) charts render with `helm template` using the values in this file, and every image they use exists (`scripts/validate.sh`).
-- A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
-- The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
-- Both Day 0 templates render for every role and pass a shell syntax check.
-
-**Single node**
-
-- The stack runs on a real Network Edge device; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
-- The public name now uses cert-manager here too (same manifests as the cluster). That path is not tested on a fresh single node yet.
-
-**Two-node cluster (Fabric Network)**
-
-| Area | Result |
-|---|---|
-| Private path | the API, kubelet and etcd use the private address; the shared API address answers with certificate verification |
-| Names and certificates | cert-manager issued the certificates for the shared name (staging, then production), `svc-dai-par01` and `svc-dai-par02`; Traefik runs on both nodes and every name answered with a valid certificate on each node's address |
-| Traefik as a DaemonSet | switching a live node to it interrupted the web entry for 3 to 10 seconds |
-| Replicated volumes | Longhorn 1.12.2 installed on both nodes; a test volume kept two replicas (one per node) and a pod on the other node read the data back |
-| Stack volumes moved | all seven (Redis, Qdrant, llm-guard, rag-service, SeaweedFS, ClickHouse, Postgres) copied to `longhorn` volumes with two replicas; each service came back and LiteLLM, Langfuse and the three web names answered 200. The move stopped each service for one to ten minutes (ClickHouse, the largest, took longest) |
-| Not tested | a third node, failover of the API address, and a node loss with Longhorn |
-
-## 11. Findings and limits
-
-- **Two nodes are not a quorum:** with two servers, losing one stops the API, and the shared API address cannot move (kube-vip needs the API to choose a holder). Running pods keep serving. A third node gives a real failover.
-- **Stack data:** a fresh install puts the stack volumes on `local-path`, as single copies on the first node, until you move them to the `longhorn` class (section 8). Moving them is a manual step, not part of Day 0.
-- **Web entry:** on a `single` node the web interfaces depend on that node. A cluster serves the same name from every node, but DNS still lists the nodes: a client that tries a failed node waits for a timeout.
-- **Public name:** the DNS wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver. A negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
-- **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
-- **Fail open:** the LLM Guard and RAG modules let a request through unchanged (logged) if their service is unreachable, so injection blocking applies only while LLM Guard answers. How LiteLLM's native Presidio hooks behave when Presidio is down is untested.
-- **Floating tags:** `presidio-*:latest`, `python:3.12-slim`, and the packages installed at first start (`llm-guard`, `torch`) can change between boots. Pin them once a deployment is validated.
-- **Model names:** the Groq and Gemini names in `src/litellm/config.yaml` come from an earlier lab config and may be stale.
-- **Day 0 size:** the Equinix portal limit is 20,000 characters; BASIC is about 13.9 KB and ADVANCED about 19.8 KB, so ADVANCED has little room left: put new logic in a script of this repo, as `scripts/fqdn.sh`, `scripts/api-vip.sh` and `longhorn.yaml` do.
-- **Not provided:** volume backups, and authentication in front of LiteLLM's `/ui` other than its own login.
-- **Internet:** the node needs outbound internet at first boot (GitHub, container registries, PyPI, Hugging Face).
-
-## 12. Repository, build and validate
+## 10. Repository, build and validate
 
 | Path | What |
 |---|---|
