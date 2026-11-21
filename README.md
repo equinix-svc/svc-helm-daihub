@@ -91,7 +91,7 @@ Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddre
 
 ### Parameters
 
-The **BASIC** and **ADVANCED** columns show whether the parameter is required in that template: `yes`, `no`, or `-` (not used). **Default** is what the template uses when a parameter that is not required is left empty. BASIC has no cluster settings: it installs one node.
+Legend: **yes** = required, **no** = optional, **-** = not used. Default = what the template uses when an optional parameter is left empty.
 
 | Parameter | BASIC | ADVANCED | Default | Example (paste in the portal) | Meaning |
 |---|---|---|---|---|---|
