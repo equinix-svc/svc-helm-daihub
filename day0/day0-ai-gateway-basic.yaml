@@ -139,7 +139,7 @@ write_files:
         "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/motd.sh" -o /etc/profile.d/dai-hub-motd.sh \
         && chmod 0644 /etc/profile.d/dai-hub-motd.sh && echo "login banner installed" || echo "login banner not installed (non-fatal)"
 
-      # Public name with a signed certificate (Let's Encrypt through Traefik): only when FQDN is given
+      # Public name with a signed certificate (Let's Encrypt through cert-manager): only when FQDN is given
       if [ -n "${FQDN:-}" ]; then
         curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" \
           "https://api.github.com/repos/equinix-svc/svc-helm-daihub/contents/scripts/fqdn.sh" -o /usr/local/bin/day0-fqdn.sh \

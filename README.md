@@ -40,7 +40,7 @@ Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qc
 | Template | Use | Portal parameters |
 |---|---|---|
 | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node only (no cluster, no private network), everything else fixed or generated | 7, 4 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: two or three node cluster (private network, shared API address), chosen credentials, pinned repo version | 14, 4 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: two or three node cluster (private network, shared API address), chosen credentials, pinned repo version | 15, 4 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
@@ -53,7 +53,8 @@ The **BASIC** and **ADVANCED** columns show whether the parameter is required in
 | `REGISTRY_USER` | yes | yes | - | `my-github-user` | GitHub login used to pull the private chat page image from ghcr.io. Day 0 stops the stack install without it. |
 | `REGISTRY_TOKEN` | yes | yes | - | `ghp_AbCdEf1234567890AbCdEf1234567890AbCd` | Classic personal access token with only `read:packages`. Written to `/etc/rancher/k3s/registries.yaml` (root only) before k3s starts. Expires: set a reminder to rotate it. |
 | `ADMIN_EMAIL` | yes | yes | - | `xxxx@eu.equinix.com` | Login name of the shared admin account (Langfuse, LiteLLM admin UI, chat page login). It must be a real address: it is also the contact for the Let's Encrypt certificates. |
-| `FQDN` | yes | yes | - | `fred-dai-par01.example.net` | Public name of the node. Serves `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by Traefik. The node's public IP is only known after creation, so create the DNS records afterwards: the node waits (checks every 30 seconds) until `<FQDN>` and `langfuse.<FQDN>` both resolve to it, then enables the certificates, so the first Let's Encrypt attempt succeeds. The login banner shows the IP to use and what each name resolves to now (`not found` or `WRONG` when it points elsewhere, for example after a rebuild with a new IP). Keep port 80 reachable from the internet. |
+| `FQDN` | yes | yes | - | `fred-dai-par01.example.net` | Public name of the node. Serves `https://<FQDN>` (LiteLLM, chat page) and `https://langfuse.<FQDN>` with Let's Encrypt certificates issued by cert-manager. The node's public IP is only known after creation, so create the DNS records afterwards: the node waits (checks every 30 seconds) until `<FQDN>` and `langfuse.<FQDN>` both resolve to it, then enables the certificates, so the first Let's Encrypt attempt succeeds. The login banner shows the IP to use and what each name resolves to now (`not found` or `WRONG` when it points elsewhere, for example after a rebuild with a new IP). Keep port 80 reachable from the internet. On a cluster it is the shared name (section 4). |
+| `NODE_FQDNS` | - | no | empty | `svc-dai-par01.example.net,svc-dai-par02.example.net` | Cluster only, first server. The nodes' own names (comma separated): each gets its own Let's Encrypt certificate and its own Ingresses, so `https://<name>` is valid on that node too. Create their DNS records like the shared name's. |
 | `GROQ_API_KEY` | no (for Groq models) | no (for Groq models) | empty | `gsk_AbCdEf1234567890` | Groq API key. |
 | `GEMINI_API_KEY` | no (for Gemini models) | no (for Gemini models) | empty | `AIzaSyAbCdEf1234567890` | Gemini API key. |
 | `LITELLM_MASTER_KEY` | - | no | generated | `sk-lab-0123456789abcdef` | LiteLLM admin key. |
@@ -127,7 +128,7 @@ Create node 1 first and wait until it is Ready and the API address answers, then
 
 ### Shared name and certificates
 
-With `K3S_ROLE=server` the first node sets up one name for the whole cluster, served by every node, with one certificate. Set `FQDN` to the shared name, for example `svc-dai.eu.solutionvalidation.center`. With `K3S_ROLE=single` Traefik asks Let's Encrypt itself, as before.
+With `K3S_ROLE=server` the first node sets up one name for the whole cluster, served by every node, with one certificate. Set `FQDN` to the shared name, for example `svc-dai.eu.solutionvalidation.center`. A `single` node uses the same pieces (cert-manager and Traefik), with one pod each. `NODE_FQDNS` (optional, comma separated, for example `svc-dai-par01.example.net,svc-dai-par02.example.net`) adds one certificate and one set of Ingresses per node name, so each node's own name is valid too.
 
 | Piece | What it does |
 |---|---|
@@ -137,7 +138,7 @@ With `K3S_ROLE=server` the first node sets up one name for the whole cluster, se
 
 Port 80 must be reachable from the internet: Let's Encrypt fetches the challenge from whichever node it reaches, and every node forwards it to the same cert-manager pod. The certificate is requested once `<FQDN>` and `langfuse.<FQDN>` resolve to the node (`dai-dns-wait`), so create the records after the node has its public address. No key or Secret needs loading.
 
-Check: `sudo k3s kubectl -n ai-gateway get certificate dai-tls` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate. A rebuilt node only needs its A record updated. A cluster that already ran with Traefik's own Let's Encrypt resolver must drop it first: that resolver answers every `/.well-known/acme-challenge/` request itself (404 for cert-manager's tokens). Remove it from the Traefik config (`traefik-config.yaml` above has none), then give each existing name its own `Certificate` and `tls.secretName` before switching. Another name (for example a per-node name) can be added later with the annotation `cert-manager.io/cluster-issuer: letsencrypt-http` on its Ingress and a `tls.secretName`.
+Check: `sudo k3s kubectl -n ai-gateway get certificate` shows `READY True`, and `https://<FQDN>` answers with a Let's Encrypt certificate. A rebuilt node only needs its A record updated. A node that ran with Traefik's own Let's Encrypt resolver must drop it first: that resolver answers every `/.well-known/acme-challenge/` request itself (404 for cert-manager's tokens). Remove it from the Traefik config (`traefik-config.yaml` above has none), then give each existing name its own `Certificate` and `tls.secretName` before switching.
 
 ### Replicated volumes
 
@@ -169,7 +170,7 @@ A two-node cluster has no spare: any failure is the last row.
 
 ### Not covered yet
 
-- **Web entry:** on a `single` node Traefik runs as one pod, so the web interfaces depend on that node. A `server` node sets up the shared name above.
+- **Web entry:** on a `single` node the web interfaces depend on that node. A `server` node sets up the shared name above.
 - **Stack data:** Postgres, Qdrant, ClickHouse, SeaweedFS and the other stack services run as single copies on the first node's local disk. Longhorn is installed, but their volumes are not moved to it yet.
 
 ## 5. Web interfaces
@@ -263,17 +264,17 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 
 ## 10. What was tested
 
-- The public name path: `fqdn.sh` writes valid manifests (accepted by the cluster API in a server-side dry run); the Traefik chart renders the Let's Encrypt resolver, the certificate volume and the permissions init container; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
+- The public name path: `fqdn.sh` writes valid manifests (accepted by the cluster API in a server-side dry run); the cert-manager and Traefik charts render; the chat proxy keeps the browser login out of LiteLLM and takes a user's own key from `X-Api-Key`.
 - The Qdrant (1.20.0), Langfuse (2.2.3) and LiteLLM (1.108.0) charts render with `helm template` using the values in this file, and every image they use exists (`scripts/validate.sh`).
 - A throwaway k3s accepted all 28 resources, including the three `HelmChart`s, in a server-side dry run.
 - The LiteLLM guardrail modules import under the real LiteLLM 1.108.0 image, and their hook signatures match.
 - Both Day 0 templates (about 18.5 KB each) render and pass a shell syntax check.
-- The shared-name mode (`K3S_ROLE=server`): `scripts/fqdn.sh` writes manifests that a real API server accepts (with the cert-manager CRDs), the cert-manager and Traefik charts render, and Traefik becomes a DaemonSet without the ACME resolver or its volume. A `single` node gets exactly the files it got before. Tested live on two nodes: cert-manager issued the certificate for the shared name (staging, then production), Traefik runs on both nodes, and every name answered with a valid certificate on each node's address.
+- The cert-manager path (`scripts/fqdn.sh`): the manifests are accepted by a real API server (with the cert-manager CRDs), the charts render, and Traefik is a DaemonSet without the ACME resolver. Tested live on two nodes: cert-manager issued the certificates for the shared name (staging, then production), for `svc-dai-par01` and for `svc-dai-par02`; Traefik runs on both nodes, and every name answered with a valid certificate on each node's address. A `single` node now takes the same path, which is not tested on a fresh single node yet.
 - Two nodes on a Fabric Network: the private path, the API and kubelet on the private address, and the shared API address with certificate verification through it. Three nodes and the failover of the address are not tested.
 
 ## 11. Findings and limits
 
-- **Public name:** the DNS wait was tested with stand-ins for DNS and the node's addresses. Let's Encrypt issued the certificates on a real node. Traefik requests a certificate about a second after it starts, so its Deployment uses the `Recreate` strategy and its Service publishes not-ready addresses (the validation can otherwise reach the old pod or no pod). The wait compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver; a negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
+- **Public name:** the DNS wait was tested with stand-ins for DNS and the node's addresses; it compares the DNS answer with the node's own addresses and with the address the internet sees (`api.ipify.org`), through the system resolver. A negative DNS answer can stay cached for a few minutes after you create a record. `sudo cat /etc/ai-gateway/dns-wait.state` shows the state, and `check-install.sh` shows the certificate issuer.
 - **Shared login:** one account, three separate sessions (no single sign-on): you type it once per site. The chat page login is browser basic auth.
 - **Fail open:** the LLM Guard and RAG modules let a request through unchanged (logged) if their service is unreachable, so injection blocking applies only while LLM Guard answers. How LiteLLM's native Presidio hooks behave when Presidio is down is untested.
 - **Floating tags:** `presidio-*:latest`, `python:3.12-slim`, and the packages installed at first start (`llm-guard`, `torch`) can change between boots. Pin them once a deployment is validated.
