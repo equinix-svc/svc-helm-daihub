@@ -1,33 +1,13 @@
 #cloud-config
-# Day 0 template for the Equinix Network Edge custom VNF profile "k3s-node" (image from equinix-svc/svc-ne-byoi-builder),
-# extended to install the AI gateway stack of this repo.
-#
-# Placeholders use the Equinix inline syntax (case-sensitive names), see docs/portal-values.md in svc-ne-byoi-builder.
-#   Equinix predefined: hostname userName publicKey adminPwd ipAddressWithCidr gateway
-#   Custom parameters : K3S_ROLE K3S_SERVER_URL K3S_TOKEN K3S_TLS_SAN
-#                       K3S_API_VIP   (API address shared by the servers: 10.250.0.10 by default with the private path; "none" turns it off;
-#                       joining nodes then use K3S_SERVER_URL=https://10.250.0.10:6443)
-#                       K3S_PRIVATE_IFACE K3S_PRIVATE_IP_CIDR   (private path, on by default: ens4, 10.250.<3rd>.<4th>/16 from the public IP; "none" turns it off)
-#                       GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY REGISTRY_USER REGISTRY_TOKEN   (REGISTRY_* required, the rest optional)
-#                       ADMIN_EMAIL (required) FQDN (required) ADMIN_PASSWORD NODE_FQDNS   (the shared login; FQDN = public name for the web interfaces, with Let's Encrypt certificates; the contact is ADMIN_EMAIL; create the DNS records before booting)
-# AI gateway variant. Uses the plain k3s-node image: on a single node or the first server, once k3s is Ready,
-# it generates the stack secrets, downloads ai-gateway.yaml from github.com/equinix-svc/svc-helm-daihub
-# (default branch) into the
-# k3s manifests directory, and k3s's Helm controller deploys LiteLLM, Langfuse, Presidio, LLM Guard, Qdrant and
-# the RAG service. Needs outbound internet at first boot. Credentials: /etc/ai-gateway/credentials.env (root).
-#
-# Equinix injects a STATIC address (no DHCP), so this file configures the network itself.
-#
-# Roles (K3S_ROLE): single | server | agent
-#   single : standalone node (server with embedded datastore)
-#   server : control-plane node; joins K3S_SERVER_URL if provided, otherwise initialises a new cluster
-#   agent  : worker; requires K3S_SERVER_URL and K3S_TOKEN
+# ADVANCED Day 0 for the Equinix Network Edge profile "k3s-node": a k3s cluster node (K3S_ROLE single | server | agent) and, on the
+# first server, the AI gateway stack of github.com/equinix-svc/svc-helm-daihub. Static network (Equinix gives no DHCP).
+# Parameters, defaults and steps: README of that repo (section 3). Credentials: /etc/ai-gateway/credentials.env (root).
 
 hostname: [(${hostname})]
 manage_etc_hosts: true
 preserve_hostname: false
 
-# The user is created by the bootstrap script below; an empty list stops cloud-init adding its default user.
+# The bootstrap script creates the user.
 users: []
 
 ssh_pwauth: false
@@ -40,8 +20,7 @@ ntp:
     - 1.pool.ntp.org
 
 write_files:
-  # Static network (systemd-networkd). Sorts before cloud-init's generated DHCP file, so it wins.
-  # Interface name ens3 is what Equinix uses in its own Debian/Ubuntu example.
+  # Static network (systemd-networkd).
   - path: /etc/systemd/network/05-equinix.network
     owner: root:root
     permissions: "0644"
@@ -85,8 +64,7 @@ write_files:
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
-      # Called by day0-bootstrap.sh with GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY
-      # ADMIN_PASSWORD in the environment (optional) and REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN (required).
+      # Env: GROQ_API_KEY GEMINI_API_KEY LITELLM_MASTER_KEY ADMIN_PASSWORD (optional); REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN (required).
       set -euo pipefail
       for v in REGISTRY_USER REGISTRY_TOKEN ADMIN_EMAIL FQDN; do
         [ -n "${!v:-}" ] || { echo "missing required parameter $v"; exit 1; }
@@ -177,8 +155,7 @@ write_files:
 
       echo "network at start:"; ip -br a; ip r
 
-      # User: the portal user (userName). The key comes from publicKey (may lack the key
-      # type); the portal password hash is set on the user.
+      # Portal user and key.
       norm_key() {
         case "$1" in
           ssh-*|ecdsa-*|sk-*)    echo "$1" ;;
@@ -187,8 +164,7 @@ write_files:
           *)                     echo "$1" ;;
         esac
       }
-      # adminPwd should be the MD5 crypt hash; adminPassword appeared alongside it on a real device, so pick
-      # whichever looks like a hash, else fall back to a plain-text value. Never concatenate them.
+      # adminPwd or adminPassword: use whichever is a hash, else plain text.
       is_hash() { case "$1" in '$1$'*|'$5$'*|'$6$'*|'$y$'*|'$2'*) return 0 ;; *) return 1 ;; esac; }
       PWD_HASH=""; PWD_PLAIN=""
       if is_hash "$ADMIN_PWD"; then PWD_HASH="$ADMIN_PWD"
@@ -231,10 +207,7 @@ write_files:
       ROLE="$K3S_ROLE"; [ -n "$ROLE" ] || ROLE=single
       NODE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
 
-      # Private path between nodes (default on): static address on a second interface, default ens4, in 10.250.0.0/16.
-      # The address is built from the public IP (10.250.<3rd>.<4th>/16) so nodes never collide; K3S_PRIVATE_IP_CIDR
-      # overrides it and "none" turns the private path off. k3s then uses it as node-ip and flannel interface, so cluster traffic
-      # (flannel, etcd, API for joining nodes) stays on it. Skipped when the interface does not exist.
+      # Private path (default on): static ens4 address 10.250.<3rd>.<4th>/16 from the public IP; node-ip and flannel use it; "none" turns it off.
       PRIV_IF="${K3S_PRIVATE_IFACE:-ens4}"; PRIV_IP=""
       PRIV_CIDR="$K3S_PRIVATE_IP_CIDR"
       if [ -z "$PRIV_CIDR" ] && [ -n "$NODE_IP" ]; then PRIV_CIDR="10.250.$(echo "$NODE_IP" | cut -d. -f3).$(echo "$NODE_IP" | cut -d. -f4)/16"; fi
@@ -264,8 +237,7 @@ write_files:
       [ -n "${PRIV_IP:-$NODE_IP}" ] && echo "node-ip: ${PRIV_IP:-$NODE_IP}" >> "$CFG"
       # flannel does not follow node-ip: without this it keeps the VXLAN on the public interface
       [ -z "$PRIV_IP" ] || echo "flannel-iface: $PRIV_IF" >> "$CFG"
-      # Cluster services on the private address only: the kubelet (10250) here, the API (6443) on servers below.
-      # k3s keeps its own loopback listener, so kubectl on the node still works.
+      # Kubelet on the private address; the API follows below (servers).
       [ -z "$PRIV_IP" ] || printf 'kubelet-arg:\n  - "address=%s"\n' "$PRIV_IP" >> "$CFG"
       [ -n "$K3S_TOKEN" ] && echo "token: \"$K3S_TOKEN\"" >> "$CFG"
 
@@ -288,8 +260,7 @@ write_files:
         *) echo "unknown K3S_ROLE: $ROLE"; exit 1 ;;
       esac
 
-      # iSCSI initiator for replicated volumes (Longhorn): every cluster node needs it. Cluster roles only; not fatal, k3s and the
-      # local-path volumes work without it. The image has no apt lists, so update first.
+      # open-iscsi for Longhorn (cluster roles, not fatal; apt lists are empty, so update first).
       if [ "$ROLE" != single ]; then
         if command -v iscsiadm >/dev/null 2>&1; then echo "open-iscsi already installed"
         elif apt-get update -qq >/var/log/open-iscsi-install.log 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq open-iscsi >>/var/log/open-iscsi-install.log 2>&1; then
@@ -312,8 +283,7 @@ write_files:
         echo "registry credentials for ghcr.io written"
       fi
 
-      # A joining node can start before its server is reachable (for example the private link is not up yet). systemd
-      # keeps retrying the unit (Restart=always), so a failed first start must not abort Day 0.
+      # A joining node may start before its server is reachable: systemd keeps retrying, so a failed start must not abort Day 0.
       systemctl daemon-reload
       systemctl enable "$UNIT"
       systemctl start "$UNIT" || echo "first start of $UNIT failed (the server may not be reachable yet); systemd keeps retrying"

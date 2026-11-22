@@ -85,7 +85,7 @@ Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qc
 | Template | Use | Size | Portal parameters |
 |---|---|---|---|
 | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node only, everything else fixed or generated | 13.9 KB | 7, 4 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster (private network, shared API address), chosen credentials | 19.8 KB | 15, 4 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster (private network, shared API address), chosen credentials | 17.0 KB | 15, 4 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. The portal limit is 20,000 characters. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
