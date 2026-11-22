@@ -12,7 +12,7 @@ spec:
   createNamespace: true
   valuesContent: |-
     persistence:
-      defaultClass: false
+      defaultClass: true
       defaultClassReplicaCount: 2
     defaultSettings:
       defaultDataPath: /var/lib/longhorn

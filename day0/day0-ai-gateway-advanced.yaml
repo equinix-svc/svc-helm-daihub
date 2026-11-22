@@ -249,6 +249,7 @@ write_files:
           UNIT=k3s ;;
         server)
           echo "write-kubeconfig-mode: \"0640\"" >> "$CFG"
+          echo "disable: local-storage" >> "$CFG"          # a cluster stores data on Longhorn (default class), not on one node
           [ -z "$PRIV_IP" ] || echo "bind-address: $PRIV_IP" >> "$CFG"
           write_sans
           if [ -n "$K3S_SERVER_URL" ]; then echo "server: \"$K3S_SERVER_URL\"" >> "$CFG"; else echo "cluster-init: true" >> "$CFG"; fi

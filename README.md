@@ -58,7 +58,7 @@ flowchart LR
 | Private network | none | Fabric Network on `ens4` (section 6) |
 | API address | the node | shared address `10.250.0.10` (kube-vip) |
 | Web names | `FQDN` | `FQDN` is shared by all nodes; `NODE_FQDNS` adds one name per node |
-| Volumes | `local-path` | `local-path`, or `longhorn` after you move them (section 8) |
+| Volumes | `local-path` (one copy on the node) | `longhorn`, the default class: two copies on two nodes (section 8) |
 | Survives a node loss | no | web entry yes; API only with 3 nodes; data on Longhorn volumes |
 
 | Step | Single node | Cluster |
@@ -317,7 +317,7 @@ A two-node cluster has no spare: any failure is the last row. The web entry keep
 
 | Element | What it does |
 |---|---|
-| StorageClass `longhorn` | 2 replicas, not the default; `local-path` stays the default |
+| StorageClass `longhorn` | 2 replicas, the default class of a cluster: the Day 0 turns k3s's `local-path` off on `server` nodes (`disable: local-storage`) |
 | Replicas | one copy of the volume on each node, rebuilt automatically |
 | Engine | runs next to the pod and writes to both replicas |
 | `open-iscsi` | needed on every node; the ADVANCED Day 0 installs it |
@@ -333,7 +333,7 @@ flowchart LR
 
 How it works: the PVC is bound to a Longhorn volume; the engine writes each block to both replicas. If a node fails, the pod restarts on the other node and attaches the surviving replica.
 
-A fresh install puts the stack volumes on `local-path`. To move one (stop its workload first): create a `longhorn` PVC, copy the data into it with a pod that mounts both, delete the old PVC, create the real PVC on `longhorn`, copy back, and start the workload. Set the old volume's reclaim policy to `Retain` first, so its data stays on disk as a backup.
+On a cluster, the stack volumes are created on `longhorn` from the start. They wait a few minutes for Longhorn to install, and with one node at first boot each volume has one copy until the second node joins. A single node (BASIC) keeps `local-path`. A cluster created before this change has its volumes on `local-path`: to move one (stop its workload first), create a `longhorn` PVC, copy the data into it with a pod that mounts both, delete the old PVC, create the real PVC on `longhorn`, copy back and start the workload. Set the old volume's reclaim policy to `Retain` first, so its data stays on disk as a backup.
 
 | Volume | Size |
 |---|---|
