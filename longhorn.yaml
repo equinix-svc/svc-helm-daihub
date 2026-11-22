@@ -18,6 +18,6 @@ spec:
       defaultDataPath: /var/lib/longhorn
       defaultReplicaCount: 2
       storageMinimalAvailablePercentage: 15
-    storageOverProvisioningPercentage: 200
+      storageOverProvisioningPercentage: 200
       # a pod on a failed node is deleted so that it restarts on a live node with the other copy of its volume
       nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod

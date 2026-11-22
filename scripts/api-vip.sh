@@ -45,13 +45,14 @@ EOF
 cat > "$SBIN/k3s-api-vip" <<'EOF'
 #!/bin/sh
 # Stable API address: the node that holds the kube-vip address rewrites VIP:PORT to its own node address, where the k3s API
-# listens. Own chain in the nat table, hooked first in PREROUTING (other hosts) and OUTPUT (this host). Idempotent.
+# listens. The rule only matches while the address is local to this host (addrtype LOCAL), so a node that does not hold it, or whose
+# API is not up yet (a joining server), still reaches the holder. Own chain in the nat table, hooked first in PREROUTING (other hosts) and OUTPUT (this host). Idempotent.
 # Usage: k3s-api-vip <VIP> <this node's address> [port]
 VIP="${1:?VIP}"; NODE="${2:?node address}"; PORT="${3:-6443}"
 IPT=/usr/sbin/iptables; C=K3S-API-VIP
 "$IPT" -t nat -N "$C" 2>/dev/null || true
 "$IPT" -t nat -F "$C"
-"$IPT" -t nat -A "$C" -d "$VIP/32" -p tcp --dport "$PORT" -j DNAT --to-destination "$NODE:$PORT"
+"$IPT" -t nat -A "$C" -d "$VIP/32" -m addrtype --dst-type LOCAL -p tcp --dport "$PORT" -j DNAT --to-destination "$NODE:$PORT"
 for H in PREROUTING OUTPUT; do "$IPT" -t nat -C "$H" -j "$C" 2>/dev/null || "$IPT" -t nat -I "$H" 1 -j "$C"; done
 EOF
 chmod 0755 "$SBIN/k3s-api-vip"
