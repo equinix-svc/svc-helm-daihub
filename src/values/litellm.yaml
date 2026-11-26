@@ -1,5 +1,9 @@
 # LiteLLM proxy. Release name "ai" -> Service ai-litellm:4000. Database, keys and API keys come from existing
 # Secrets (ai-secrets, litellm-env), created by Day 0.
+@@CLUSTER
+replicaCount: 2                    # both share Postgres and Redis (router state)
+@@END
+@@SPREAD app.kubernetes.io/name=litellm,app.kubernetes.io/instance=ai@@
 image:
   pullPolicy: IfNotPresent
 db:

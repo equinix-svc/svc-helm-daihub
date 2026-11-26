@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="DAI Hub" width="120">
 
-AI gateway stack for a single k3s node or a two or three node k3s cluster, as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml). It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik. Deployed on two Network Edge devices, as a single node and as a two-node cluster; a third node is not tested yet.
+AI gateway stack for a single k3s node or a two or three node k3s cluster, as **one file**: [`ai-gateway.yaml`](ai-gateway.yaml) for a single node, [`ai-gateway-cluster.yaml`](ai-gateway-cluster.yaml) for a cluster. It runs on the plain `k3s-node` image of [svc-ne-byoi-builder](https://github.com/equinix-svc/svc-ne-byoi-builder) (Equinix Network Edge BYOI) and works on any k3s with Traefik.
 
 | Section | Topic |
 |---|---|
@@ -43,7 +43,7 @@ Tools used on behalf of the install: **k3s** (its manifests directory is the dep
 flowchart LR
   P["Equinix portal<br/>Day 0 + parameters"] --> N["k3s-node<br/>first boot"]
   N --> K["k3s manifests directory"]
-  G["this repository<br/>ai-gateway.yaml, chat-ui.yaml,<br/>longhorn.yaml, scripts"] -- "fetched by Day 0" --> K
+  G["this repository<br/>stack file, chat-ui.yaml,<br/>longhorn.yaml, scripts"] -- "fetched by Day 0" --> K
   K --> S["stack: LiteLLM, Langfuse,<br/>guardrails, RAG, databases"]
   K --> E["web entry:<br/>Traefik + cert-manager"]
   K --> V["volumes: Longhorn (cluster)"]
@@ -58,8 +58,10 @@ flowchart LR
 | Private network | none | Fabric Network on `ens4` (section 6) |
 | API address | the node | shared address `10.250.0.10` (kube-vip) |
 | Web names | `FQDN` | `FQDN` is shared by all nodes; `NODE_FQDNS` adds one name per node |
+| Stack file | `ai-gateway.yaml` | `ai-gateway-cluster.yaml` |
+| Service copies | one of each | two of the gateway, guardrails, Langfuse and cluster DNS; one of each database (section 7) |
 | Volumes | `local-path` (one copy on the node) | `longhorn`, the default class: two copies on two nodes (section 8) |
-| Survives a node loss | no | web entry yes; API only with 3 nodes; data on Longhorn volumes |
+| Survives a node loss | no | web entry and duplicated services yes; API only with 3 nodes; a database restarts on another node with its Longhorn copy |
 
 | Step | Single node | Cluster |
 |---|---|---|
@@ -79,13 +81,13 @@ On the node, `check-install.sh` is a read-only check:  `curl -fsSL https://raw.g
 Both templates are the Equinix Network Edge Day 0 for the unchanged `k3s-node.qcow2`. They do what that image's own Day 0 does (hostname, static network, portal user, k3s), then on a `single` node or the first `server`, once k3s is Ready:
 
 1. generate the two Secrets (section 9) with random values, except the keys you pass in, and write the ones you need to `/etc/ai-gateway/credentials.env` (root only);
-2. download `ai-gateway.yaml` and `chat-ui.yaml` (and, on a cluster, `longhorn.yaml`) from this repo into `/var/lib/rancher/k3s/server/manifests/`, where k3s deploys them;
+2. download the stack file and `chat-ui.yaml` (and, on a cluster, `longhorn.yaml`) from this repo into `/var/lib/rancher/k3s/server/manifests/`, where k3s deploys them. A cluster gets `ai-gateway-cluster.yaml`, saved as `ai-gateway.yaml`, and its DNS (CoreDNS) is set to two copies;
 3. run `scripts/fqdn.sh` (names and certificates), and on a cluster `scripts/api-vip.sh` and the `open-iscsi` install.
 
 | Template | Use | Size | Portal parameters |
 |---|---|---|---|
 | [`day0/day0-ai-gateway-basic.yaml`](day0/day0-ai-gateway-basic.yaml) | **BASIC**: single node only, everything else fixed or generated | 13.9 KB | 7, 4 required |
-| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster (private network, shared API address), chosen credentials | 17.0 KB | 15, 4 required |
+| [`day0/day0-ai-gateway-advanced.yaml`](day0/day0-ai-gateway-advanced.yaml) | **ADVANCED**: cluster (private network, shared API address), chosen credentials | 17.4 KB | 15, 4 required |
 
 Equinix predefined (both): `hostname` `userName` `publicKey` `adminPwd` `ipAddressWithCidr` `gateway`. Declare every other variable as a custom parameter in the portal. The portal limit is 20,000 characters. Render locally with `DAY0_FILE=<file> scripts/render-day0.sh`. Log: `/var/log/day0.log`.
 
@@ -294,6 +296,31 @@ flowchart TB
   T2 --> SVC
 ```
 
+### Service copies
+
+On a cluster, each core service has two copies, always on different nodes. A failed node leaves one copy serving.
+
+| Service | Single node | Cluster | Kind on a cluster |
+|---|---|---|---|
+| LiteLLM (gateway) | 1 | 2 | Deployment; both share Postgres and Redis |
+| Presidio analyzer, anonymizer (guardrails) | 1 each | 2 each | Deployment |
+| LLM Guard (guardrail) | 1 | 2 | StatefulSet, one volume per copy |
+| Langfuse web, worker (observability) | 1 each | 2 each | Deployment |
+| CoreDNS (cluster DNS) | 1 | 2 | scaled by Day 0 |
+| Postgres, Redis, ClickHouse, SeaweedFS | 1 each | 1 each | restarts on another node with its Longhorn copy |
+| rag-service, Qdrant, chat page | 1 each | 1 each | restarts on another node |
+
+```mermaid
+flowchart LR
+  T["Traefik<br/>any node"] --> S["Service<br/>ai-litellm"]
+  S --> A["gateway copy<br/>node A"]
+  S --> B["gateway copy<br/>node B"]
+  A --> D[("databases<br/>one copy")]
+  B --> D
+```
+
+How it works: a Service sends requests to the ready copies only. A topology spread rule keeps two copies of a service on different nodes. Kubernetes takes under a minute to mark a failed node and stop using its copies. The databases are single points of failure until their copy restarts, about 5 minutes later or more.
+
 ### When a node fails
 
 | Servers up | etcd majority | API | API address |
@@ -339,7 +366,7 @@ On a cluster, the stack volumes are created on `longhorn` from the start. They w
 |---|---|
 | `postgres-data` | 10 Gi |
 | `clickhouse-data`, `langfuse-s3-all-in-one-data` | 20 Gi each |
-| `llm-guard-data` | 8 Gi |
+| `llm-guard-data` (single node); `data-llm-guard-0`, `data-llm-guard-1` (cluster) | 8 Gi each |
 | `qdrant-storage-qdrant-0` | 5 Gi |
 | `rag-service-data` | 3 Gi |
 | `redis-data` | 1 Gi |
@@ -361,8 +388,8 @@ client -> Traefik :80/:443 -> LiteLLM (ai-litellm:4000)
 | Guardrails | LiteLLM loads two custom modules from a ConfigMap (`llm_guard_guardrail.py`, `rag_augment.py`) and uses its native Presidio integration. |
 | Injection gate | DeBERTa must flag the text and explicit injection wording must be present before a request is blocked, to avoid false positives on ordinary instructions. |
 | RAG | Opt-in per request with `"guardrails": ["rag-augment"]`. Documents (`.txt`, `.md`) go in bucket `rag-docs` and are ingested into Qdrant collection `knowledge-base`. |
-| Secrets | None are in `ai-gateway.yaml`. Day 0 creates two Secrets in namespace `ai-gateway`: `ai-secrets` and `litellm-env`. The S3 password is generated by the Langfuse chart. |
-| Config source | `ai-gateway.yaml` is generated from `ai-gateway.yaml.in` and `src/` by `scripts/build.py`. |
+| Secrets | None are in the stack files. Day 0 creates two Secrets in namespace `ai-gateway`: `ai-secrets` and `litellm-env`. The S3 password is generated by the Langfuse chart. |
+| Config source | Both stack files are generated from `ai-gateway.yaml.in` and `src/` by `scripts/build.py`. |
 
 | Secret | Keys |
 |---|---|
@@ -395,7 +422,7 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 
 | Path | What |
 |---|---|
-| `ai-gateway.yaml` (generated), `ai-gateway.yaml.in`, `src/` | the stack manifest and its sources (LiteLLM config, guardrail modules, chart values) |
+| `ai-gateway.yaml`, `ai-gateway-cluster.yaml` (generated), `ai-gateway.yaml.in`, `src/` | the stack manifests and their sources (LiteLLM config, guardrail modules, chart values) |
 | `chat-ui.yaml`, `src/chat-ui/` | the chat page manifest and image |
 | `longhorn.yaml` | Longhorn, cluster only |
 | `day0/` | the two Day 0 templates |
@@ -404,4 +431,4 @@ sudo k3s kubectl -n ai-gateway exec deploy/rag-service -- python -c \
 | `scripts/motd.sh`, `scripts/check-install.sh` | login banner, read-only check |
 | `scripts/build.py`, `scripts/validate.sh`, `scripts/render-day0.sh` | build the manifest, render every chart, render a Day 0 |
 
-Edit `ai-gateway.yaml.in` and the files under `src/`, then run `scripts/validate.sh`. It builds `ai-gateway.yaml` and renders every chart with `helm template` in Docker. Commit both the sources and the generated file.
+Edit `ai-gateway.yaml.in` and the files under `src/`, then run `scripts/validate.sh`. It builds both stack files and renders every chart with `helm template` in Docker. Lines between `@@SINGLE` or `@@CLUSTER` and `@@END` go into one file only; `@@SPREAD` keeps copies on different nodes. Commit both the sources and the generated files.
