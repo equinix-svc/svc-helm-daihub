@@ -298,7 +298,7 @@ flowchart TB
 
 ### Service copies
 
-On a cluster, each core service has two copies, always on different nodes. A failed node leaves one copy serving.
+On a cluster, each core service has two copies, always on different nodes. A failed node leaves one copy serving. A service copy is a running container; a disk copy is something else ([section 8](#8-storage-replication)).
 
 | Service | Single node | Cluster | Kind on a cluster |
 |---|---|---|---|
@@ -342,23 +342,50 @@ A two-node cluster has no spare: any failure is the last row. The web entry keep
 
 **Longhorn** keeps each volume on two nodes. With `K3S_ROLE=server` the first node installs [`longhorn.yaml`](longhorn.yaml) (Longhorn 1.12.2, a `HelmChart`).
 
+### Service copy and volume copy
+
+"Copy" means two different things on a cluster:
+
+| | Service copy (section 7) | Longhorn copy (replica) |
+|---|---|---|
+| **What is duplicated** | the running program (container) | the disk volume |
+| **Both active?** | yes, both serve requests | one program uses the volume; both disks receive every write |
+| **If a node fails** | the other copy keeps serving | the data survives, but a program must restart and reattach it |
+| **What has two** | gateway, guardrails, Langfuse, cluster DNS | every volume |
+
+### What Longhorn replicates
+
+Longhorn replicates **disk blocks, live, from the volume to two nodes**. When a program writes, Longhorn sends the write to both replicas before confirming it. It has no knowledge of files or database records. If a node fails, the program restarts on another node and attaches the surviving replica.
+
+```mermaid
+flowchart TB
+  P["PostgreSQL<br/>one container"] -- "write" --> V["Longhorn volume"]
+  V --> R1[("replica on<br/>one node")]
+  V --> R2[("replica on<br/>another node")]
+```
+
 | Element | What it does |
 |---|---|
 | StorageClass `longhorn` | 2 replicas, the default class of a cluster: the Day 0 turns k3s's `local-path` off on `server` nodes (`disable: local-storage`) |
-| Replicas | one copy of the volume on each node, rebuilt automatically |
-| Engine | runs next to the pod and writes to both replicas |
+| Replicas | two copies of each volume, on two different nodes, rebuilt automatically |
+| Engine | runs on the same node as the pod and writes to both replicas |
 | `open-iscsi` | needed on every node; the ADVANCED Day 0 installs it |
 | Node failure | `nodeDownPodDeletionPolicy` deletes the pod of a failed node so it restarts on a live node with its copy |
 | Over-provisioning | 200%: volumes are thin, and the copies made during a move would otherwise not fit |
 
-```mermaid
-flowchart LR
-  P["pod"] --> PVC["PVC<br/>class longhorn"] --> E["engine"]
-  E --> R1[("replica<br/>node 1")]
-  E --> R2[("replica<br/>node 2")]
-```
+### How both apply to the services
 
-How it works: the PVC is bound to a Longhorn volume; the engine writes each block to both replicas. If a node fails, the pod restarts on the other node and attaches the surviving replica.
+| Service | Containers on a cluster | Data on disk |
+|---|---|---|
+| LiteLLM, Presidio, Langfuse web and worker | 2 | none of their own |
+| LLM Guard | 2 | one volume each (software and model, no user data), each replicated twice |
+| PostgreSQL, Redis, ClickHouse, SeaweedFS | **1** | one volume each, replicated twice |
+| Qdrant, rag-service | 1 | one volume each, replicated twice |
+
+- **Databases:** if the PostgreSQL node fails, the data is safe on the other replica, but the database is **unavailable until a new container starts**. The same applies to the other single containers.
+- **Not a backup:** a deletion or a corruption is written to both replicas at once.
+
+### Volumes
 
 On a cluster, the stack volumes are created on `longhorn` from the start. They wait a few minutes for Longhorn to install, and with one node at first boot each volume has one copy until the second node joins. A single node (BASIC) keeps `local-path`. A cluster created before this change has its volumes on `local-path`: to move one (stop its workload first), create a `longhorn` PVC, copy the data into it with a pod that mounts both, delete the old PVC, create the real PVC on `longhorn`, copy back and start the workload. Set the old volume's reclaim policy to `Retain` first, so its data stays on disk as a backup.
 
