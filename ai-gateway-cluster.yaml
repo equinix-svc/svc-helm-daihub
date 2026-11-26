@@ -29,6 +29,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: postgres-data, namespace: ai-gateway }
 spec:
+  storageClassName: longhorn
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 10Gi } }
 ---
@@ -78,6 +79,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: redis-data, namespace: ai-gateway }
 spec:
+  storageClassName: longhorn
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 1Gi } }
 ---
@@ -122,6 +124,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: clickhouse-data, namespace: ai-gateway }
 spec:
+  storageClassName: longhorn
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 20Gi } }
 ---
@@ -507,6 +510,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: rag-service-data, namespace: ai-gateway }
 spec:
+  storageClassName: longhorn
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 3Gi } }
 ---
@@ -712,6 +716,7 @@ apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata: { name: langfuse, namespace: kube-system }
 spec:
+  failurePolicy: abort
   repo: https://langfuse.github.io/langfuse-k8s
   chart: langfuse
   version: 2.2.3
@@ -831,6 +836,7 @@ apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata: { name: ai, namespace: kube-system }
 spec:
+  failurePolicy: abort
   chart: oci://ghcr.io/berriai/litellm-helm
   version: 1.108.0
   targetNamespace: ai-gateway

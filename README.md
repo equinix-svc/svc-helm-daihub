@@ -319,6 +319,8 @@ flowchart LR
   B --> D
 ```
 
+A chart upgrade that fails on a cluster stops and keeps the release (`failurePolicy: abort`), so its volumes are not removed by a reinstall.
+
 How it works: a Service sends requests to the ready copies only. A topology spread rule keeps two copies of a service on different nodes. Kubernetes takes under a minute to mark a failed node and stop using its copies. The databases are single points of failure until their copy restarts, about 5 minutes later or more.
 
 ### When a node fails
@@ -366,7 +368,7 @@ flowchart TB
 
 | Element | What it does |
 |---|---|
-| StorageClass `longhorn` | 2 replicas, the default class of a cluster: the Day 0 turns k3s's `local-path` off on `server` nodes (`disable: local-storage`) |
+| StorageClass `longhorn` | 2 replicas, the default class of a cluster: the Day 0 turns k3s's `local-path` off on `server` nodes (`disable: local-storage`). `ai-gateway-cluster.yaml` also names it on the stack's volume claims |
 | Replicas | two copies of each volume, on two different nodes, rebuilt automatically |
 | Engine | runs on the same node as the pod and writes to both replicas |
 | `open-iscsi` | needed on every node; the ADVANCED Day 0 installs it |
