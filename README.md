@@ -389,7 +389,7 @@ flowchart TB
 
 ### Volumes
 
-On a cluster, the stack volumes are created on `longhorn` from the start. They wait a few minutes for Longhorn to install, and with one node at first boot each volume has one copy until the second node joins. A single node (BASIC) keeps `local-path`. A cluster created before this change has its volumes on `local-path`: to move one (stop its workload first), create a `longhorn` PVC, copy the data into it with a pod that mounts both, delete the old PVC, create the real PVC on `longhorn`, copy back and start the workload. Set the old volume's reclaim policy to `Retain` first, so its data stays on disk as a backup.
+On a cluster, the stack volumes are created on `longhorn` from the start. They wait a few minutes for Longhorn to install, and with one node at first boot each volume has one copy until the second node joins. A single node (BASIC) keeps `local-path`. To move a volume from `local-path` to `longhorn`, stop its workload first, create a temporary `longhorn` PVC, copy the data into it with a pod that mounts both, delete the old PVC, create the real PVC on `longhorn`, copy back and start the workload. Set the old volume's reclaim policy to `Retain` first, so its data stays on disk as a backup.
 
 | Volume | Size |
 |---|---|
