@@ -32,7 +32,7 @@ One Day 0 file per node turns the unchanged `k3s-node` image into a k3s node and
 | Data | Postgres 16 (databases `litellm`, `langfuse`), Redis 7, ClickHouse 26.8 | official images, plain Deployments |
 | S3 | SeaweedFS all-in-one (buckets `langfuse`, `rag-docs`) | shipped by the Langfuse chart |
 | Chat page | nginx with one static page | image `ghcr.io/equinix-svc/svc-helm-daihub/chat-ui`, manifest `chat-ui.yaml` |
-| Web entry | Traefik (k3s built-in), cert-manager | Traefik DaemonSet; cert-manager chart; configured by `scripts/fqdn.sh` |
+| Web exposure | Traefik (k3s built-in), cert-manager | Traefik DaemonSet; cert-manager chart; configured by `scripts/fqdn.sh` |
 | Cluster | k3s embedded etcd, kube-vip, Longhorn | `scripts/api-vip.sh`, `longhorn.yaml` |
 
 Only LiteLLM (with the chat page and Langfuse) is exposed, on 80/443 through Traefik. Everything else stays inside the cluster. Langfuse's own Postgres, Redis and ClickHouse sub-charts are turned off, so Langfuse uses the shared ones above.
@@ -45,7 +45,7 @@ flowchart LR
   N --> K["k3s manifests directory"]
   G["this repository<br/>stack file, chat-ui.yaml,<br/>longhorn.yaml, scripts"] -- "fetched by Day 0" --> K
   K --> S["stack: LiteLLM, Langfuse,<br/>guardrails, RAG, databases"]
-  K --> E["web entry:<br/>Traefik + cert-manager"]
+  K --> E["web exposure:<br/>Traefik + cert-manager"]
   K --> V["volumes: Longhorn (cluster)"]
 ```
 
@@ -61,7 +61,7 @@ flowchart LR
 | Stack file | `ai-gateway.yaml` | `ai-gateway-cluster.yaml` |
 | Service copies | one of each | two of the gateway, guardrails, Langfuse and cluster DNS; one of each database (section 7) |
 | Volumes | `local-path` (one copy on the node) | `longhorn`, the default class: two copies on two nodes (section 8) |
-| Survives a node loss | no | web entry and duplicated services yes; API only with 3 nodes; a database restarts on another node with its Longhorn copy |
+| Survives a node loss | no | web exposure and duplicated services yes; API only with 3 nodes; a database restarts on another node with its Longhorn copy |
 
 | Step | Single node | Cluster |
 |---|---|---|
@@ -275,7 +275,7 @@ Two paths enter the cluster. Each has its own mechanism.
 | | Internal exposure (the API) | External exposure (web) |
 |---|---|---|
 | Who uses it | joining nodes, `kubectl` | users, clients |
-| Entry | shared API address `10.250.0.10` | DNS names, one A record per node |
+| Address | shared API address `10.250.0.10` | DNS names, one A record per node |
 | Mechanism | kube-vip moves the address to a live server | Traefik runs on every node with the same certificate |
 | Certificate | the address is in the API certificate (`tls-san`) | cert-manager, Secret `dai-tls` |
 | When a node fails | the address moves, if etcd still has a majority | the other node still answers; DNS keeps listing the failed node |
@@ -331,7 +331,7 @@ How it works: a Service sends requests to the ready copies only. A topology spre
 | 2 of 3 | yes | works | moves to a live node (not tested yet) |
 | 1 of 3, or 1 of 2 | no | stops; running pods keep serving | cannot move: kube-vip needs the API to choose a holder |
 
-A two-node cluster has no spare: any failure is the last row. The web entry keeps answering on the live node, with the pods that run there.
+A two-node cluster has no spare: any failure is the last row. Web exposure keeps answering on the live node, with the pods that run there.
 
 ### Check
 
